@@ -36,6 +36,8 @@ ComPtr<ID3DBlob> Compile(const char* entry, const char* profile) {
 struct DrawConstants {
     XMFLOAT4X4 wvp, world;
     XMFLOAT4 color;
+    float animationProgress;
+    float padding[3];
 };
 constexpr unsigned ConstantCount = sizeof(DrawConstants) / sizeof(float);
 }
@@ -126,14 +128,14 @@ void Renderer::Init(HWND window) {
     fenceEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (!fenceEvent) throw std::runtime_error("GPU Fence Event를 만들지 못했음");
     MakePipeline();
-    LoadTextTextures();
+    LoadTextures();
 }
 
 void Renderer::MakePipeline() {
-    D3D12_DESCRIPTOR_RANGE fontRange{};
-    fontRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    fontRange.NumDescriptors = 1;
-    fontRange.BaseShaderRegister = 0;  // 글자 텍스처 레지스터 t0
+    D3D12_DESCRIPTOR_RANGE textureRange{};
+    textureRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    textureRange.NumDescriptors = 1;
+    textureRange.BaseShaderRegister = 0;  // 텍스처 레지스터 t0
 
     D3D12_ROOT_PARAMETER params[2]{};
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
@@ -142,7 +144,7 @@ void Renderer::MakePipeline() {
     params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    params[1].DescriptorTable = { 1, &fontRange };
+    params[1].DescriptorTable = { 1, &textureRange };
     params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     D3D12_STATIC_SAMPLER_DESC sampler{};
@@ -170,6 +172,10 @@ void Renderer::MakePipeline() {
     const auto vs = Compile("VSMain", "vs_5_0");
     const auto ps = Compile("PSMain", "ps_5_0");
     const auto psFont = Compile("PSFont", "ps_5_0");
+    const auto psModel = Compile("PSModel", "ps_5_0");
+    const auto vsImpact = Compile("VSImpact", "vs_5_0");
+    const auto gsImpact = Compile("GSImpact", "gs_5_0");
+    const auto psImpact = Compile("PSImpact", "ps_5_0");
     const D3D12_INPUT_ELEMENT_DESC layout[] = {
         {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
         {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
@@ -177,15 +183,12 @@ void Renderer::MakePipeline() {
     };
     D3D12_GRAPHICS_PIPELINE_STATE_DESC state{};
     state.pRootSignature = root.Get();
-    state.InputLayout = {layout, _countof(layout)};
-    state.VS = {vs->GetBufferPointer(), vs->GetBufferSize()};
     state.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
     state.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
     state.RasterizerState.DepthClipEnable = TRUE;
     state.DepthStencilState.DepthEnable = TRUE;
     state.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
     state.SampleMask = UINT_MAX;
-    state.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     state.NumRenderTargets = 1;
     state.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
     state.DSVFormat = DXGI_FORMAT_D32_FLOAT;
@@ -201,23 +204,38 @@ void Renderer::MakePipeline() {
     blend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
     for (int index = 0; index < static_cast<int>(Pass::Count); ++index) {
         const auto pass = static_cast<Pass>(index);
-        state.DepthStencilState.DepthWriteMask = pass == Pass::Opaque ? D3D12_DEPTH_WRITE_MASK_ALL : D3D12_DEPTH_WRITE_MASK_ZERO;
-        auto* pixelShader = pass == Pass::Font ? psFont.Get() : ps.Get();
+        const bool impact = pass == Pass::Impact;
+        const bool transparent = pass == Pass::Alpha || pass == Pass::Font || impact;
+        state.InputLayout = {layout, impact ? 1u : static_cast<UINT>(_countof(layout))};
+        state.PrimitiveTopologyType = impact ? D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT
+            : D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        auto* const vertexShader = impact ? vsImpact.Get() : vs.Get();
+        state.VS = {vertexShader->GetBufferPointer(), vertexShader->GetBufferSize()};
+        state.GS = {};
+        if (impact) state.GS = {gsImpact->GetBufferPointer(), gsImpact->GetBufferSize()};
+        state.DepthStencilState.DepthWriteMask = transparent ? D3D12_DEPTH_WRITE_MASK_ZERO : D3D12_DEPTH_WRITE_MASK_ALL;
+        auto* pixelShader = ps.Get();
+        if (pass == Pass::Font) pixelShader = psFont.Get();
+        if (pass == Pass::Model) pixelShader = psModel.Get();
+        if (impact) pixelShader = psImpact.Get();
         state.PS = {pixelShader->GetBufferPointer(), pixelShader->GetBufferSize()};
-        blend.BlendEnable = pass != Pass::Opaque;
+        blend.BlendEnable = transparent;
         Check(device->CreateGraphicsPipelineState(&state, IID_PPV_ARGS(&pipeline[index])), "Graphics Pipeline State를 만들지 못했음");
     }
 }
 
-void Renderer::LoadTextTextures() {
-    constexpr UINT textureCount = static_cast<UINT>(TextTexture::Count);
+void Renderer::LoadTextures() {
+    constexpr UINT textureCount = static_cast<UINT>(TextureId::Count);
     constexpr struct {
         const wchar_t* path;
         const char* error;
     } files[] = {
         {L"Texture/IntroText.dds", "IntroText.dds를 불러오지 못했음"},
         {L"Texture/MenuText.dds", "MenuText.dds를 불러오지 못했음"},
-        {L"Texture/TutorialText.dds", "TutorialText.dds를 불러오지 못했음"}
+        {L"Texture/TutorialText.dds", "TutorialText.dds를 불러오지 못했음"},
+        {L"Texture/T04_BaseColor.dds", "T04_BaseColor.dds를 불러오지 못했음"},
+        {L"Texture/H04_BaseColor.dds", "H04_BaseColor.dds를 불러오지 못했음"},
+        {L"Texture/ImpactSpark.dds", "ImpactSpark.dds를 불러오지 못했음"}
     };
     static_assert(_countof(files) == textureCount);
 
@@ -225,13 +243,13 @@ void Renderer::LoadTextTextures() {
     heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     heapDesc.NumDescriptors = textureCount;
     heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-    Check(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&textSrvHeap)),
-        "Text Texture용 Descriptor Heap을 만들지 못했음");
+    Check(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&textureSrvHeap)),
+        "Texture용 Descriptor Heap을 만들지 못했음");
 
     ResetCommands();
     ComPtr<ID3D12Resource> uploads[textureCount];
     for (UINT index = 0; index < textureCount; ++index) {
-        auto& texture = textTextures[index];
+        auto& texture = textures[index];
         std::unique_ptr<uint8_t[]> ddsData;
         std::vector<D3D12_SUBRESOURCE_DATA> subresources;
         Check(DirectX::LoadDDSTextureFromFileEx(
@@ -242,7 +260,7 @@ void Renderer::LoadTextTextures() {
         uploads[index] = UploadBuffer(GetRequiredIntermediateSize(texture.Get(), 0, count));
         if (UpdateSubresources(commands.Get(), texture.Get(), uploads[index].Get(),
             0, 0, count, subresources.data()) == 0) {
-            throw std::runtime_error("Text Texture를 복사하지 못했음");
+            throw std::runtime_error("Texture를 복사하지 못했음");
         }
 
         Transition(commands.Get(), texture.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
@@ -255,7 +273,7 @@ void Renderer::LoadTextTextures() {
         srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         srvDesc.Texture2D.MipLevels = textureDesc.MipLevels;
         device->CreateShaderResourceView(texture.Get(), &srvDesc,
-            Cpu(textSrvHeap.Get(), index, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV));
+            Cpu(textureSrvHeap.Get(), index, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV));
     }
     SubmitCommands();
     WaitForGpu();
@@ -329,28 +347,31 @@ void Renderer::BeginFrame(const XMFLOAT4& clear) {
     commands->RSSetViewports(1, &viewport);
     commands->RSSetScissorRects(1, &scissor);
     commands->SetGraphicsRootSignature(root.Get());
-    ID3D12DescriptorHeap* heaps[] = {textSrvHeap.Get()};
+    ID3D12DescriptorHeap* heaps[] = {textureSrvHeap.Get()};
     commands->SetDescriptorHeaps(_countof(heaps), heaps);
-    commands->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 }
 
-void Renderer::BindTextTexture(TextTexture texture) {
-    auto handle = textSrvHeap->GetGPUDescriptorHandleForHeapStart();
+void Renderer::BindTexture(TextureId texture) {
+    auto handle = textureSrvHeap->GetGPUDescriptorHandleForHeapStart();
     const UINT increment =
         device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     handle.ptr += UINT64(static_cast<UINT>(texture)) * increment;
     commands->SetGraphicsRootDescriptorTable(1, handle);
 }
 
-void Renderer::Draw(const Mesh& mesh, const XMMATRIX& world, const XMFLOAT4& color, Pass pass) {
+void Renderer::Draw(const Mesh& mesh, const XMMATRIX& world, const XMFLOAT4& color,
+    Pass pass, float animationProgress) {
     if (pass != currentPass) {
         commands->SetPipelineState(pipeline[static_cast<int>(pass)].Get());
+        commands->IASetPrimitiveTopology(pass == Pass::Impact ? D3D_PRIMITIVE_TOPOLOGY_POINTLIST
+            : D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         currentPass = pass;
     }
     DrawConstants constants{};
     XMStoreFloat4x4(&constants.wvp, world * viewProjection);
     XMStoreFloat4x4(&constants.world, world);
     constants.color = color;
+    constants.animationProgress = animationProgress;
     commands->SetGraphicsRoot32BitConstants(0, ConstantCount, &constants, 0);
     commands->IASetVertexBuffers(0, 1, &mesh.view);
     commands->DrawInstanced(mesh.count, 1, 0, 0);

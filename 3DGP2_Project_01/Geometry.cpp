@@ -118,6 +118,7 @@ Mesh LoadObj(Renderer& renderer, const char* path) {
     std::ifstream file(path);
     if (!file) throw std::runtime_error(std::string("OBJ 파일을 열지 못했음\n") + path);
     std::vector<XMFLOAT3> positions, normals;
+    std::vector<XMFLOAT2> texcoords;
     std::vector<Vertex> vertices;
     std::string line;
     while (std::getline(file, line)) {
@@ -129,6 +130,10 @@ Mesh LoadObj(Renderer& renderer, const char* path) {
             row >> v.x >> v.y >> v.z;
             v.x = -v.x;  // 전방 방향은 +Z로 유지하면서 오른손 좌표계를 왼손 좌표계로 변환한다.
             (tag == "v" ? positions : normals).push_back(v);
+        } else if (tag == "vt") {
+            XMFLOAT2 uv{};
+            row >> uv.x >> uv.y;
+            texcoords.push_back({uv.x, 1.0f - uv.y});
         } else if (tag == "f") {
             std::vector<Vertex> face;
             std::string corner;
@@ -138,7 +143,7 @@ Mesh LoadObj(Renderer& renderer, const char* path) {
                 unsigned p = 0, uv = 0, n = 0;
                 if (!(indices >> p >> uv >> n) || !p || !uv || !n)
                     throw std::runtime_error("OBJ Face 데이터가 v/vt/vn 형식이 아님");
-                face.push_back({positions.at(p - 1), normals.at(n - 1)});
+                face.push_back({positions.at(p - 1), normals.at(n - 1), texcoords.at(uv - 1)});
             }
             for (size_t i = 1; i + 1 < face.size(); ++i)
                 vertices.insert(vertices.end(), {face[0], face[i + 1], face[i]});
