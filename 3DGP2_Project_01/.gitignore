@@ -1,0 +1,4 @@
+# Visual Studio local settings and build output
+.vs/
+x64/
+*.vcxproj.user
