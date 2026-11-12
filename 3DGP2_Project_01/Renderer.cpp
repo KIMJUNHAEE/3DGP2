@@ -1,3 +1,4 @@
+#include "stdafx.h"
 #include "Renderer.h"
 #include <d3dcompiler.h>
 #include <cstring>

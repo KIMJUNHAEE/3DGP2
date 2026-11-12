@@ -1,3 +1,4 @@
+#include "stdafx.h"
 #include "Geometry.h"
 #include <DirectXCollision.h>
 #include <algorithm>
