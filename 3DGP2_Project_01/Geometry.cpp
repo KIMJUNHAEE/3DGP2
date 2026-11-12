@@ -24,44 +24,6 @@ void Box(std::vector<Vertex>& vertices, float left, float right, float bottom, f
     Quad(vertices, {left,bottom,front}, {right,bottom,front}, {left,bottom,back}, {right,bottom,back}, {0,-1,0});
 }
 
-struct FontBitmap {
-    FontBitmap(int width, int height, int pixelSize) {
-        dc = CreateCompatibleDC(nullptr);
-        BITMAPINFO info{};
-        info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-        info.bmiHeader.biWidth = width;
-        info.bmiHeader.biHeight = -height;
-        info.bmiHeader.biPlanes = 1;
-        info.bmiHeader.biBitCount = 32;
-        info.bmiHeader.biCompression = BI_RGB;
-        bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, reinterpret_cast<void**>(&pixels), nullptr, 0);
-        font = CreateFontW(-pixelSize, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
-            DEFAULT_PITCH, L"Malgun Gothic");
-        if (!dc || !bitmap || !font) {
-            Release();
-            throw std::runtime_error("Windows Font Bitmap을 만들지 못했음");
-        }
-        oldBitmap = SelectObject(dc, bitmap);
-        oldFont = SelectObject(dc, font);
-        PatBlt(dc, 0, 0, width, height, BLACKNESS);
-        SetBkMode(dc, TRANSPARENT);
-        SetTextColor(dc, RGB(255, 255, 255));
-    }
-    ~FontBitmap() { Release(); }
-    void Release() {
-        if (oldBitmap) SelectObject(dc, oldBitmap);
-        if (oldFont) SelectObject(dc, oldFont);
-        if (bitmap) DeleteObject(bitmap);
-        if (font) DeleteObject(font);
-        if (dc) DeleteDC(dc);
-    }
-    HDC dc = nullptr;
-    HBITMAP bitmap = nullptr;
-    HFONT font = nullptr;
-    HGDIOBJ oldBitmap = nullptr, oldFont = nullptr;
-    unsigned* pixels = nullptr;
-};
 }
 
 Mesh MakeBox(Renderer& renderer) {
@@ -150,40 +112,6 @@ Mesh LoadObj(Renderer& renderer, const char* path) {
         }
     }
     return renderer.MakeMesh(vertices);
-}
-
-TextMesh Make3DText(Renderer& renderer, const wchar_t* text) {
-    constexpr int width = 620, height = 36;
-    FontBitmap mask(width, height, 19);
-    TextOutW(mask.dc, 3, 2, text, lstrlenW(text));
-    GdiFlush();
-    int left = width, right = 0, top = height, bottom = 0;
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            if ((mask.pixels[y * width + x] & 255) < 128) continue;
-            left = std::min(left, x);
-            right = std::max(right, x + 1);
-            top = std::min(top, y);
-            bottom = std::max(bottom, y + 1);
-        }
-    }
-    std::vector<Vertex> vertices;
-    constexpr float pixel = .095f;
-    const float midX = (left + right) * .5f, midY = (top + bottom) * .5f;
-    for (int y = top; y < bottom; ++y) {
-        int x = left;
-        while (x < right) {
-            if ((mask.pixels[y * width + x] & 255) < 128) {
-                ++x;
-                continue;
-            }
-            const int start = x;
-            while (x < right && (mask.pixels[y * width + x] & 255) >= 128) ++x;
-            Box(vertices, (start - midX) * pixel, (x - midX) * pixel,
-                (midY - y - 1) * pixel, (midY - y) * pixel, -.15f, .15f);
-        }
-    }
-    return {renderer.MakeMesh(vertices), (right - left) * pixel, (bottom - top) * pixel};
 }
 
 TextMesh MakeTexturedQuad(Renderer& renderer, float width, float height,

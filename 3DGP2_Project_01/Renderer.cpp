@@ -37,9 +37,13 @@ struct DrawConstants {
     XMFLOAT4X4 wvp, world;
     XMFLOAT4 color;
     float animationProgress;
-    float padding[3];
+    XMFLOAT3 cameraPosition;
 };
 constexpr unsigned ConstantCount = sizeof(DrawConstants) / sizeof(float);
+
+bool UsesPointList(Pass pass) {
+    return pass == Pass::Impact || pass == Pass::Tree;
+}
 }
 
 Renderer::~Renderer() {
@@ -54,6 +58,13 @@ D3D12_CPU_DESCRIPTOR_HANDLE Renderer::Cpu(ID3D12DescriptorHeap* heap, unsigned i
 }
 
 void Renderer::Init(HWND window) {
+    RECT client{};
+    if (!GetClientRect(window, &client) || client.right <= 0 || client.bottom <= 0) {
+        throw std::runtime_error("게임 창의 크기를 가져오지 못했음");
+    }
+    width = static_cast<UINT>(client.right);
+    height = static_cast<UINT>(client.bottom);
+
     UINT factoryFlags = 0;
 #if defined(_DEBUG)
     ComPtr<ID3D12Debug> debug;
@@ -75,8 +86,8 @@ void Renderer::Init(HWND window) {
     D3D12_COMMAND_QUEUE_DESC queueDesc{};
     Check(device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&queue)), "Command Queue를 만들지 못했음");
     DXGI_SWAP_CHAIN_DESC1 swapDesc{};
-    swapDesc.Width = Width;
-    swapDesc.Height = Height;
+    swapDesc.Width = width;
+    swapDesc.Height = height;
     swapDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     swapDesc.SampleDesc.Count = 1;
     swapDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
@@ -96,27 +107,7 @@ void Renderer::Init(HWND window) {
     heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
     heap.NumDescriptors = 1;
     Check(device->CreateDescriptorHeap(&heap, IID_PPV_ARGS(&dsv)), "DSV Descriptor Heap을 만들지 못했음");
-    for (unsigned index = 0; index < 2; ++index) {
-        Check(swap->GetBuffer(index, IID_PPV_ARGS(&targets[index])), "Swap Chain Buffer를 가져오지 못했음");
-        device->CreateRenderTargetView(targets[index].Get(), nullptr, Cpu(rtvs.Get(), index, D3D12_DESCRIPTOR_HEAP_TYPE_RTV));
-    }
-    D3D12_HEAP_PROPERTIES gpuHeap{};
-    gpuHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
-    D3D12_RESOURCE_DESC depthDesc{};
-    depthDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    depthDesc.Width = Width;
-    depthDesc.Height = Height;
-    depthDesc.DepthOrArraySize = 1;
-    depthDesc.MipLevels = 1;
-    depthDesc.Format = DXGI_FORMAT_D32_FLOAT;
-    depthDesc.SampleDesc.Count = 1;
-    depthDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
-    D3D12_CLEAR_VALUE depthClear{};
-    depthClear.Format = depthDesc.Format;
-    depthClear.DepthStencil.Depth = 1;
-    Check(device->CreateCommittedResource(&gpuHeap, D3D12_HEAP_FLAG_NONE, &depthDesc,
-        D3D12_RESOURCE_STATE_DEPTH_WRITE, &depthClear, IID_PPV_ARGS(&depth)), "Depth Buffer를 만들지 못했음");
-    device->CreateDepthStencilView(depth.Get(), nullptr, Cpu(dsv.Get(), 0, D3D12_DESCRIPTOR_HEAP_TYPE_DSV));
+    CreateFrameBuffers();
 
     if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator))) ||
         FAILED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr,
@@ -129,6 +120,45 @@ void Renderer::Init(HWND window) {
     if (!fenceEvent) throw std::runtime_error("GPU Fence Event를 만들지 못했음");
     MakePipeline();
     LoadTextures();
+}
+
+bool Renderer::Resize(UINT newWidth, UINT newHeight) {
+    if (!newWidth || !newHeight || (newWidth == width && newHeight == height)) return false;
+
+    WaitForGpu();
+    for (auto& target : targets) target.Reset();
+    depth.Reset();
+    Check(swap->ResizeBuffers(0, newWidth, newHeight, DXGI_FORMAT_UNKNOWN, 0),
+        "Swap Chain 크기를 변경하지 못했음");
+
+    width = newWidth;
+    height = newHeight;
+    CreateFrameBuffers();
+    return true;
+}
+
+void Renderer::CreateFrameBuffers() {
+    for (unsigned index = 0; index < 2; ++index) {
+        Check(swap->GetBuffer(index, IID_PPV_ARGS(&targets[index])), "Swap Chain Buffer를 가져오지 못했음");
+        device->CreateRenderTargetView(targets[index].Get(), nullptr, Cpu(rtvs.Get(), index, D3D12_DESCRIPTOR_HEAP_TYPE_RTV));
+    }
+    D3D12_HEAP_PROPERTIES gpuHeap{};
+    gpuHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+    D3D12_RESOURCE_DESC depthDesc{};
+    depthDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    depthDesc.Width = width;
+    depthDesc.Height = height;
+    depthDesc.DepthOrArraySize = 1;
+    depthDesc.MipLevels = 1;
+    depthDesc.Format = DXGI_FORMAT_D32_FLOAT;
+    depthDesc.SampleDesc.Count = 1;
+    depthDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+    D3D12_CLEAR_VALUE depthClear{};
+    depthClear.Format = depthDesc.Format;
+    depthClear.DepthStencil.Depth = 1;
+    Check(device->CreateCommittedResource(&gpuHeap, D3D12_HEAP_FLAG_NONE, &depthDesc,
+        D3D12_RESOURCE_STATE_DEPTH_WRITE, &depthClear, IID_PPV_ARGS(&depth)), "Depth Buffer를 만들지 못했음");
+    device->CreateDepthStencilView(depth.Get(), nullptr, Cpu(dsv.Get(), 0, D3D12_DESCRIPTOR_HEAP_TYPE_DSV));
 }
 
 void Renderer::MakePipeline() {
@@ -176,11 +206,15 @@ void Renderer::MakePipeline() {
     const auto vsImpact = Compile("VSImpact", "vs_5_0");
     const auto gsImpact = Compile("GSImpact", "gs_5_0");
     const auto psImpact = Compile("PSImpact", "ps_5_0");
+    const auto vsTree = Compile("VSTree", "vs_5_0");
+    const auto gsTree = Compile("GSTree", "gs_5_0");
+    const auto psTree = Compile("PSTree", "ps_5_0");
     const D3D12_INPUT_ELEMENT_DESC layout[] = {
         {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
         {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
         {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}
     };
+    const D3D12_INPUT_ELEMENT_DESC treeLayout[] = {layout[0], layout[2]};
     D3D12_GRAPHICS_PIPELINE_STATE_DESC state{};
     state.pRootSignature = root.Get();
     state.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
@@ -205,20 +239,34 @@ void Renderer::MakePipeline() {
     for (int index = 0; index < static_cast<int>(Pass::Count); ++index) {
         const auto pass = static_cast<Pass>(index);
         const bool impact = pass == Pass::Impact;
+        const bool tree = pass == Pass::Tree;
         const bool transparent = pass == Pass::Alpha || pass == Pass::Font || impact;
         state.InputLayout = {layout, impact ? 1u : static_cast<UINT>(_countof(layout))};
-        state.PrimitiveTopologyType = impact ? D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT
+        if (tree) state.InputLayout = {treeLayout, _countof(treeLayout)};
+        state.PrimitiveTopologyType = UsesPointList(pass) ? D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT
             : D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-        auto* const vertexShader = impact ? vsImpact.Get() : vs.Get();
-        state.VS = {vertexShader->GetBufferPointer(), vertexShader->GetBufferSize()};
-        state.GS = {};
-        if (impact) state.GS = {gsImpact->GetBufferPointer(), gsImpact->GetBufferSize()};
-        state.DepthStencilState.DepthWriteMask = transparent ? D3D12_DEPTH_WRITE_MASK_ZERO : D3D12_DEPTH_WRITE_MASK_ALL;
+        auto* vertexShader = vs.Get();
+        ID3DBlob* geometryShader = nullptr;
         auto* pixelShader = ps.Get();
         if (pass == Pass::Font) pixelShader = psFont.Get();
         if (pass == Pass::Model) pixelShader = psModel.Get();
-        if (impact) pixelShader = psImpact.Get();
+        if (impact) {
+            vertexShader = vsImpact.Get();
+            geometryShader = gsImpact.Get();
+            pixelShader = psImpact.Get();
+        }
+        if (tree) {
+            vertexShader = vsTree.Get();
+            geometryShader = gsTree.Get();
+            pixelShader = psTree.Get();
+        }
+        state.VS = {vertexShader->GetBufferPointer(), vertexShader->GetBufferSize()};
+        state.GS = {};
+        if (geometryShader) {
+            state.GS = {geometryShader->GetBufferPointer(), geometryShader->GetBufferSize()};
+        }
         state.PS = {pixelShader->GetBufferPointer(), pixelShader->GetBufferSize()};
+        state.DepthStencilState.DepthWriteMask = transparent ? D3D12_DEPTH_WRITE_MASK_ZERO : D3D12_DEPTH_WRITE_MASK_ALL;
         blend.BlendEnable = transparent;
         Check(device->CreateGraphicsPipelineState(&state, IID_PPV_ARGS(&pipeline[index])), "Graphics Pipeline State를 만들지 못했음");
     }
@@ -235,7 +283,10 @@ void Renderer::LoadTextures() {
         {L"Texture/TutorialText.dds", "TutorialText.dds를 불러오지 못했음"},
         {L"Texture/T04_BaseColor.dds", "T04_BaseColor.dds를 불러오지 못했음"},
         {L"Texture/H04_BaseColor.dds", "H04_BaseColor.dds를 불러오지 못했음"},
-        {L"Texture/ImpactSpark.dds", "ImpactSpark.dds를 불러오지 못했음"}
+        {L"Texture/ImpactSpark.dds", "ImpactSpark.dds를 불러오지 못했음"},
+        {L"Texture/TreeBillboard.dds", "TreeBillboard.dds를 불러오지 못했음"},
+        {L"Texture/FontDigits.dds", "FontDigits.dds를 불러오지 못했음"},
+        {L"Texture/GameText.dds", "GameText.dds를 불러오지 못했음"}
     };
     static_assert(_countof(files) == textureCount);
 
@@ -342,8 +393,8 @@ void Renderer::BeginFrame(const XMFLOAT4& clear) {
     commands->ClearRenderTargetView(color, rgba, 0, nullptr);
     commands->ClearDepthStencilView(z, D3D12_CLEAR_FLAG_DEPTH, 1, 0, 0, nullptr);
     commands->OMSetRenderTargets(1, &color, FALSE, &z);
-    const D3D12_VIEWPORT viewport{0, 0, float(Width), float(Height), 0, 1};
-    const D3D12_RECT scissor{0, 0, Width, Height};
+    const D3D12_VIEWPORT viewport{0, 0, float(width), float(height), 0, 1};
+    const D3D12_RECT scissor{0, 0, static_cast<LONG>(width), static_cast<LONG>(height)};
     commands->RSSetViewports(1, &viewport);
     commands->RSSetScissorRects(1, &scissor);
     commands->SetGraphicsRootSignature(root.Get());
@@ -363,7 +414,7 @@ void Renderer::Draw(const Mesh& mesh, const XMMATRIX& world, const XMFLOAT4& col
     Pass pass, float animationProgress) {
     if (pass != currentPass) {
         commands->SetPipelineState(pipeline[static_cast<int>(pass)].Get());
-        commands->IASetPrimitiveTopology(pass == Pass::Impact ? D3D_PRIMITIVE_TOPOLOGY_POINTLIST
+        commands->IASetPrimitiveTopology(UsesPointList(pass) ? D3D_PRIMITIVE_TOPOLOGY_POINTLIST
             : D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         currentPass = pass;
     }
@@ -372,6 +423,7 @@ void Renderer::Draw(const Mesh& mesh, const XMMATRIX& world, const XMFLOAT4& col
     XMStoreFloat4x4(&constants.world, world);
     constants.color = color;
     constants.animationProgress = animationProgress;
+    constants.cameraPosition = cameraPosition;
     commands->SetGraphicsRoot32BitConstants(0, ConstantCount, &constants, 0);
     commands->IASetVertexBuffers(0, 1, &mesh.view);
     commands->DrawInstanced(mesh.count, 1, 0, 0);

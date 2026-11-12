@@ -9,9 +9,6 @@
 using namespace DirectX;
 using Microsoft::WRL::ComPtr;
 
-constexpr unsigned Width = 1280;
-constexpr unsigned Height = 720;
-
 struct Vertex {
     XMFLOAT3 position;
     XMFLOAT3 normal;
@@ -24,13 +21,16 @@ struct Mesh {
     unsigned count = 0;
 };
 
-enum class Pass { Opaque, Alpha, Font, Model, Impact, Count };
-enum class TextureId { Intro, Menu, Tutorial, Tank, Helicopter, Impact, Count };
+enum class Pass { Opaque, Alpha, Font, Model, Impact, Tree, Count };
+enum class TextureId { Intro, Menu, Tutorial, Tank, Helicopter, Impact, Tree, Digits, GameText, Count };
 
 class Renderer {
 public:
     ~Renderer();
     void Init(HWND window);
+    bool Resize(UINT width, UINT height);
+    UINT Width() const { return width; }
+    UINT Height() const { return height; }
     Mesh MakeMesh(const std::vector<Vertex>& vertices);
     void BeginFrame(const XMFLOAT4& clear);
     void BindTexture(TextureId texture);
@@ -38,6 +38,7 @@ public:
         Pass pass = Pass::Opaque, float animationProgress = 0.0f);
     void EndFrame();
     XMMATRIX viewProjection = XMMatrixIdentity();
+    XMFLOAT3 cameraPosition{};
 
 private:
     ComPtr<ID3D12Resource> UploadBuffer(UINT64 bytes);
@@ -45,6 +46,7 @@ private:
     void SubmitCommands();
     void WaitForGpu();
     void MakePipeline();
+    void CreateFrameBuffers();
     D3D12_CPU_DESCRIPTOR_HANDLE Cpu(ID3D12DescriptorHeap* heap, unsigned index, D3D12_DESCRIPTOR_HEAP_TYPE type);
 
     ComPtr<ID3D12Device> device;
@@ -59,6 +61,7 @@ private:
     ComPtr<ID3D12Resource> targets[2], depth;
     ComPtr<ID3D12RootSignature> root;
     ComPtr<ID3D12PipelineState> pipeline[static_cast<int>(Pass::Count)];
+    UINT width = 0, height = 0;
     unsigned backBuffer = 0;
     Pass currentPass = Pass::Count;
 

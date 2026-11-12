@@ -55,13 +55,14 @@ struct Impact {
 };
 struct Obstacle {
     XMFLOAT3 position;
-    float size, yaw;
+    float size;
 };
 }
 
 class Game {
 public:
     void Init(HWND window);
+    void Resize(UINT width, UINT height);
     void Update(float dt);
     void Render();
     void Key(WPARAM key);
@@ -77,9 +78,11 @@ private:
     void SpawnImpact(const XMFLOAT3& position, float size, bool large);
     void DrawTank(const Unit& unit, float hullYaw, bool friendly);
     void DrawHelicopter();
-    void DrawText3D(const TextMesh& text, const XMMATRIX& world, const XMFLOAT4& color);
     void DrawFragments();
     void DrawImpacts();
+    void DrawHealthLabels();
+    void DrawHealthNumber(int hp, const XMMATRIX& world, const XMFLOAT4& color);
+    XMMATRIX BillboardRotation() const;
     XMMATRIX IntroName() const;
     XMMATRIX MenuItem(size_t index) const;
     XMFLOAT3 EnemyCenter(size_t index) const;
@@ -90,10 +93,11 @@ private:
     int Remaining() const;
 
     Renderer renderer;
-    Mesh box, sphere, terrain, impactPoint;
+    Mesh box, sphere, terrain, impactPoint, treePoints;
     std::array<Mesh, 3> tank, helicopter;
     TextMesh title{}, name{}, introHint{}, menuTitle{}, winText{}, lostText{}, goalText{};
     std::array<TextMesh, 6> menu;
+    std::array<Mesh, 10> healthDigits;
     TextMesh tutorial{};
     Scene scene = Scene::Intro;
     Result result = Result::Playing;
@@ -133,9 +137,13 @@ void Game::Init(HWND window) {
     name = MakeTexturedQuad(renderer, 4.6f, 2.3f, 0.0f, 0.0f, 0.5f, 0.5f);
     introHint = MakeTexturedQuad(renderer, 10.4f, 2.6f, 0.0f, 0.5f, 1.0f, 1.0f);
     menuTitle = MakeTexturedQuad(renderer, 9.6f, 2.4f, 0.0f, 0.0f, 1.0f, 0.125f);
-    winText = Make3DText(renderer, L"You Win!");
-    lostText = Make3DText(renderer, L"Game Over");
-    goalText = Make3DText(renderer, L"GOAL");
+    // GameText.dds의 세 줄을 각각 하나의 사각형에 매핑한다.
+    constexpr float gameTextWidth = 14.0f;
+    constexpr float gameTextHeight = gameTextWidth / 6.0f;
+    constexpr float textRow = 1.0f / 3.0f;
+    winText = MakeTexturedQuad(renderer, gameTextWidth, gameTextHeight, 0, 0, 1, textRow);
+    lostText = MakeTexturedQuad(renderer, gameTextWidth, gameTextHeight, 0, textRow, 1, 2 * textRow);
+    goalText = MakeTexturedQuad(renderer, gameTextWidth, gameTextHeight, 0, 2 * textRow, 1, 1);
 
     // 투명 여백을 잘라 클릭 범위를 각 메뉴 항목의 글자 크기에 맞춘다.
     constexpr float menuHalfWidths[] = {168, 148, 148, 148, 108, 78};
@@ -151,7 +159,20 @@ void Game::Init(HWND window) {
     }
     tutorial = MakeTexturedQuad(renderer, 30.72f, 9.6f, 0.0f, 0.0f, 1.0f, 1.0f);
 
+    // 숫자마다 4×4 아틀라스에서 사용할 UV 영역을 지정한다.
+    constexpr float digitCell = .25f;
+    for (size_t digit = 0; digit < healthDigits.size(); ++digit) {
+        const float u = static_cast<float>(digit % 4) * digitCell;
+        const float v = static_cast<float>(digit / 4) * digitCell;
+        healthDigits[digit] = MakeTexturedQuad(renderer, 1.6f, 1.6f,
+            u, v, u + digitCell, v + digitCell).mesh;
+    }
+
     Enter(Scene::Intro);
+}
+
+void Game::Resize(UINT width, UINT height) {
+    if (renderer.Resize(width, height)) UpdateCamera();
 }
 
 void Game::Enter(Scene next) {
@@ -165,6 +186,7 @@ void Game::Enter(Scene next) {
     enemies.clear();
     balloons.clear();
     obstacles.clear();
+    treePoints = {};
     player = {};
     yaw = pitch = 0;
     target = -1;
@@ -195,12 +217,23 @@ void Game::Enter(Scene next) {
         std::mt19937 placement(4);
         std::uniform_real_distribution<float> position(-68.f, 68.f), size(1.1f, 2.8f);
         const size_t count = scene == Scene::Level2 ? 55 : 26;
+        std::vector<Vertex> trees;
+        trees.reserve(count);
         while (obstacles.size() < count) {
             const float x = position(placement), z = position(placement);
             if (std::abs(x) < 24 && z > -20 && z < 53) continue;
             const float scale = size(placement);
-            obstacles.push_back({{x, GroundHeight(x, z) + scale * .5f, z}, scale, x * .12f});
+            const float ground = GroundHeight(x, z);
+            obstacles.push_back({{x, ground + scale * .5f, z}, scale});
+
+            const float height = scale * 2.4f;
+            const float width = height * (2.0f / 3.0f);
+            // DDS 아래쪽 투명 여백을 지면 아래로 내려 밑동을 맞춘다.
+            constexpr float bottomPadding = 9.0f / 768.0f;
+            const float centerY = ground + height * (.5f - bottomPadding);
+            trees.push_back({{x, centerY, z}, {0, 0, 0}, {width, height}});
         }
+        treePoints = renderer.MakeMesh(trees);
     }
     UpdateCamera();
 }
@@ -240,9 +273,16 @@ void Game::UpdateCamera() {
             to = position + forward * 11.f + XMVectorSet(0, 1.9f + pitch * 13.f, 0, 0);
         }
     }
+    XMStoreFloat3(&renderer.cameraPosition, from);
     view = XMMatrixLookAtLH(from, to, XMVectorSet(0, 1, 0, 0));
-    viewProjection = view *
-        XMMatrixPerspectiveFovLH(XMConvertToRadians(57), float(Width) / Height, .15f, 380.f);
+    const float aspect = static_cast<float>(renderer.Width()) / renderer.Height();
+    float fov = XMConvertToRadians(57);
+    // 좁은 창에서도 인트로와 튜토리얼의 좌우 끝이 잘리지 않도록 한다.
+    constexpr float uiAspect = 16.0f / 9.0f;
+    if (!IsLevel() && aspect < uiAspect) {
+        fov = 2.0f * std::atan(std::tan(fov * .5f) * uiAspect / aspect);
+    }
+    viewProjection = view * XMMatrixPerspectiveFovLH(fov, aspect, .15f, 380.f);
 }
 
 void Game::Key(WPARAM key) {
@@ -273,8 +313,10 @@ XMMATRIX Game::MenuItem(size_t index) const {
 
 void Game::Click(int x, int y, bool right) {
     const XMMATRIX inverse = XMMatrixInverse(nullptr, viewProjection);
-    const auto nearPoint = XMVector3TransformCoord(XMVectorSet(2.f * x / Width - 1.f, 1.f - 2.f * y / Height, 0, 1), inverse);
-    const auto farPoint = XMVector3TransformCoord(XMVectorSet(2.f * x / Width - 1.f, 1.f - 2.f * y / Height, 1, 1), inverse);
+    const float ndcX = 2.f * x / renderer.Width() - 1.f;
+    const float ndcY = 1.f - 2.f * y / renderer.Height();
+    const auto nearPoint = XMVector3TransformCoord(XMVectorSet(ndcX, ndcY, 0, 1), inverse);
+    const auto farPoint = XMVector3TransformCoord(XMVectorSet(ndcX, ndcY, 1, 1), inverse);
     const auto direction = XMVector3Normalize(farPoint - nearPoint);
     auto textHit = [&](const TextMesh& text, const XMMATRIX& world) {
         const auto local = XMMatrixInverse(nullptr, world);
@@ -504,10 +546,6 @@ void Game::DrawHelicopter() {
     renderer.Draw(helicopter[2], tailRotor, color, Pass::Model);
 }
 
-void Game::DrawText3D(const TextMesh& text, const XMMATRIX& world, const XMFLOAT4& color) {
-    renderer.Draw(text.mesh, world, color);
-}
-
 void Game::DrawFragments() {
     for (const auto& fragment : fragments) {
         const float size = fragment.size * (1.f - fragment.age / fragment.life);
@@ -517,17 +555,53 @@ void Game::DrawFragments() {
     }
 }
 
-void Game::DrawImpacts() {
-    if (impacts.empty()) return;
-    renderer.BindTexture(TextureId::Impact);
+XMMATRIX Game::BillboardRotation() const {
     // 카메라의 회전만 적용해 사각형이 화면을 향하도록 한다.
     auto cameraRotation = XMMatrixInverse(nullptr, view);
     cameraRotation.r[3] = XMVectorSet(0, 0, 0, 1);
+    return cameraRotation;
+}
+
+void Game::DrawImpacts() {
+    if (impacts.empty()) return;
+    renderer.BindTexture(TextureId::Impact);
+    const auto cameraRotation = BillboardRotation();
     for (const auto& impact : impacts) {
         const auto world = XMMatrixScaling(impact.size, impact.size, impact.size) *
             cameraRotation * At(impact.position);
         const float progress = (time - impact.start) / impact.duration;
         renderer.Draw(impactPoint, world, {1, 1, 1, 1}, Pass::Impact, progress);
+    }
+}
+
+void Game::DrawHealthNumber(int hp, const XMMATRIX& world, const XMFLOAT4& color) {
+    if (hp <= 0) return;
+    const auto digits = std::to_string(hp);
+    constexpr float spacing = .85f;
+    float x = -.5f * static_cast<float>(digits.size() - 1) * spacing;
+    for (const char digit : digits) {
+        renderer.Draw(healthDigits[digit - '0'], XMMatrixTranslation(x, 0, 0) * world, color, Pass::Font);
+        x += spacing;
+    }
+}
+
+void Game::DrawHealthLabels() {
+    renderer.BindTexture(TextureId::Digits);
+    const auto facing = BillboardRotation();
+
+    for (const auto& enemy : enemies) {
+        const auto& p = enemy.position;
+        DrawHealthNumber(enemy.hp, facing * XMMatrixTranslation(p.x, p.y + 4.1f, p.z), Red);
+    }
+    for (size_t index = 0; index < balloons.size(); ++index) {
+        auto p = BalloonCenter(index);
+        p.y += 2.15f;
+        DrawHealthNumber(balloons[index].hp, facing * At(p), Ice);
+    }
+    if (!firstPerson) {
+        const auto& p = player.position;
+        const float height = IsHelicopter() ? 5.2f : 4.1f;
+        DrawHealthNumber(player.hp, facing * XMMatrixTranslation(p.x, p.y + height, p.z), Mint);
     }
 }
 
@@ -554,11 +628,8 @@ void Game::Render() {
         renderer.Draw(tutorial.mesh, XMMatrixTranslation(0, 0.1f, 0), {1, 1, 1, 1}, Pass::Font);
     } else {
         renderer.Draw(terrain, XMMatrixIdentity(), {.36f, .49f, .3f, 1});
-        for (const auto& obstacle : obstacles) {
-            const auto world = XMMatrixScaling(obstacle.size, obstacle.size, obstacle.size) *
-                XMMatrixRotationY(obstacle.yaw) * At(obstacle.position);
-            renderer.Draw(box, world, {.39f, .36f, .30f, 1});
-        }
+        renderer.BindTexture(TextureId::Tree);
+        renderer.Draw(treePoints, XMMatrixIdentity(), {1, 1, 1, 1}, Pass::Tree);
         for (size_t index = 0; index < enemies.size(); ++index) {
             if (!enemies[index].hp) continue;
             DrawTank(enemies[index], XM_PI, false);
@@ -585,11 +656,6 @@ void Game::Render() {
         if (scene == Scene::Level1) {
             const float ground = GroundHeight(0, 65);
             renderer.Draw(box, XMMatrixScaling(10, .4f, 10) * XMMatrixTranslation(0, ground, 65), Mint);
-            DrawText3D(goalText, XMMatrixRotationY(time * .45f) * XMMatrixTranslation(0, ground + 9, 65), Mint);
-        }
-        if (result != Result::Playing) {
-            const auto textWorld = XMMatrixTranslation(0, .45f, 11) * XMMatrixInverse(nullptr, view);
-            DrawText3D(result == Result::Won ? winText : lostText, textWorld, result == Result::Won ? Mint : Red);
         }
     }
 
@@ -598,21 +664,111 @@ void Game::Render() {
         const float ground = GroundHeight(0, 65);
         renderer.Draw(box, XMMatrixScaling(4, 12, 4) * XMMatrixTranslation(0, ground + 6, 65),
             {.15f, 1.f, .63f, .16f}, Pass::Alpha);
+        renderer.BindTexture(TextureId::GameText);
+        const auto goalWorld = XMMatrixRotationY(time * .45f) * XMMatrixTranslation(0, ground + 9, 65);
+        renderer.Draw(goalText.mesh, goalWorld, Mint, Pass::Font);
     }
     if (shield && player.hp) {
         renderer.Draw(sphere, XMMatrixScaling(4, 3.05f, 4) * At(PlayerCenter()),
             {.18f, .85f, 1.f, .2f}, Pass::Alpha);
     }
     DrawImpacts();
+    if (IsLevel()) DrawHealthLabels();
+    if (result != Result::Playing) {
+        // 결과 문구는 화면 위쪽에 배치하고 전투 화면 위에 그린다.
+        const float aspect = static_cast<float>(renderer.Width()) / renderer.Height();
+        const float overlayHeight = std::max(12.0f, 20.0f / aspect);
+        renderer.viewProjection = XMMatrixOrthographicLH(overlayHeight * aspect, overlayHeight, 0, 1);
+        renderer.BindTexture(TextureId::GameText);
+        const bool won = result == Result::Won;
+        renderer.Draw(won ? winText.mesh : lostText.mesh, XMMatrixTranslation(0, overlayHeight * .14f, 0),
+            won ? Mint : Red, Pass::Font);
+    }
     renderer.EndFrame();
 }
 
 namespace {
+constexpr DWORD WindowedStyle = WS_OVERLAPPEDWINDOW;
+constexpr LONG DefaultClientWidth = 1600;
+constexpr LONG DefaultClientHeight = 900;
 Game* activeGame = nullptr;
 POINT previousMouse{};
+SIZE pendingClientSize{};
+WINDOWPLACEMENT windowedPlacement{sizeof(WINDOWPLACEMENT)};
+bool fullscreen = false;
+
+RECT InitialWindowBounds() {
+    RECT workArea{0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)};
+    SystemParametersInfoW(SPI_GETWORKAREA, 0, &workArea, 0);
+
+    RECT frame{};
+    AdjustWindowRectExForDpi(&frame, WindowedStyle, FALSE, 0, GetDpiForSystem());
+    const LONG frameWidth = frame.right - frame.left;
+    const LONG frameHeight = frame.bottom - frame.top;
+    const LONG workWidth = workArea.right - workArea.left;
+    const LONG workHeight = workArea.bottom - workArea.top;
+    const double scale = std::min({
+        1.0, static_cast<double>(workWidth - frameWidth) / DefaultClientWidth,
+        static_cast<double>(workHeight - frameHeight) / DefaultClientHeight
+    });
+    const LONG width = std::max(1L, static_cast<LONG>(DefaultClientWidth * scale)) + frameWidth;
+    const LONG height = std::max(1L, static_cast<LONG>(DefaultClientHeight * scale)) + frameHeight;
+    const LONG left = workArea.left + (workWidth - width) / 2;
+    const LONG top = workArea.top + (workHeight - height) / 2;
+    return {left, top, left + width, top + height};
+}
+
+bool FitFullscreen(HWND window) {
+    MONITORINFO monitor{sizeof(MONITORINFO)};
+    if (!GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &monitor)) return false;
+    const auto& bounds = monitor.rcMonitor;
+    return SetWindowPos(window, HWND_TOP, bounds.left, bounds.top,
+        bounds.right - bounds.left, bounds.bottom - bounds.top, SWP_FRAMECHANGED | SWP_NOOWNERZORDER) != FALSE;
+}
+
+void ToggleFullscreen(HWND window) {
+    const LONG_PTR style = GetWindowLongPtrW(window, GWL_STYLE);
+    if (!fullscreen) {
+        if (!GetWindowPlacement(window, &windowedPlacement)) return;
+        SetWindowLongPtrW(window, GWL_STYLE,
+            (style & ~static_cast<LONG_PTR>(WindowedStyle | WS_MAXIMIZE)) | WS_POPUP);
+        fullscreen = true;
+        if (FitFullscreen(window)) return;
+    }
+
+    fullscreen = false;
+    SetWindowLongPtrW(window, GWL_STYLE, (style & ~static_cast<LONG_PTR>(WS_POPUP)) | WindowedStyle);
+    SetWindowPlacement(window, &windowedPlacement);
+    SetWindowPos(window, nullptr, 0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+}
 
 LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM key, LPARAM detail) {
     switch (message) {
+    case WM_SIZE:
+        if (key != SIZE_MINIMIZED) pendingClientSize = {LOWORD(detail), HIWORD(detail)};
+        return 0;
+    case WM_DPICHANGED:
+        if (fullscreen) {
+            FitFullscreen(window);
+        } else {
+            const auto& bounds = *reinterpret_cast<const RECT*>(detail);
+            SetWindowPos(window, nullptr, bounds.left, bounds.top,
+                bounds.right - bounds.left, bounds.bottom - bounds.top, SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        return 0;
+    case WM_DISPLAYCHANGE:
+        if (fullscreen) FitFullscreen(window);
+        break;
+    case WM_SYSKEYDOWN:
+        if (key == VK_RETURN && (detail & (1LL << 29))) {
+            if (activeGame && !(detail & (1LL << 30))) ToggleFullscreen(window);
+            return 0;
+        }
+        break;
+    case WM_SYSCHAR:
+        if (key == VK_RETURN) return 0;
+        break;
     case WM_KEYDOWN:
         if (activeGame && !(detail & (1LL << 30))) activeGame->Key(key);
         return 0;
@@ -654,18 +810,16 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
             }
             folder = folder.parent_path();
         }
-        SetProcessDPIAware();
+        if (!SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) SetProcessDPIAware();
         WNDCLASSW windowClass{};
         windowClass.hInstance = instance;
         windowClass.lpfnWndProc = WindowProc;
         windowClass.lpszClassName = L"3DGP2_Project_01_Window";
         windowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
         if (!RegisterClassW(&windowClass)) throw std::runtime_error("Window Class를 등록하지 못했음");
-        constexpr DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
-        RECT bounds{0, 0, Width, Height};
-        AdjustWindowRect(&bounds, style, FALSE);
+        const RECT bounds = InitialWindowBounds();
         HWND window = CreateWindowW(windowClass.lpszClassName, L"3D Game Programming 1 - Assignment 4",
-            style, CW_USEDEFAULT, CW_USEDEFAULT, bounds.right - bounds.left, bounds.bottom - bounds.top,
+            WindowedStyle, bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top,
             nullptr, nullptr, instance, nullptr);
         if (!window) throw std::runtime_error("게임 창을 만들지 못했음");
 
@@ -691,6 +845,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
             const auto now = Clock::now();
             const float dt = std::clamp(std::chrono::duration<float>(now - lastFrame).count(), .0001f, .05f);
             lastFrame = now;
+            game.Resize(static_cast<UINT>(pendingClientSize.cx), static_cast<UINT>(pendingClientSize.cy));
             game.Update(dt);
             game.Render();
         }

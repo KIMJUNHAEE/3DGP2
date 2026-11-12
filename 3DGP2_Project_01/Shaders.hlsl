@@ -3,6 +3,7 @@ cbuffer DrawConstants : register(b0) {
     row_major float4x4 world;
     float4 color;
     float animationProgress;
+    float3 cameraPosition;
 };
 
 struct Vertex {
@@ -51,9 +52,14 @@ struct ImpactPoint {
     float3 position : POSITION;
 };
 
-struct ImpactPixel {
+struct BillboardPixel {
     float4 position : SV_POSITION;
     float2 uv : TEXCOORD0;
+};
+
+static const float2 billboardUV[4] = {
+    float2(0, 0), float2(0, 1),
+    float2(1, 0), float2(1, 1)
 };
 
 ImpactPoint VSImpact(float3 position : POSITION) {
@@ -63,25 +69,60 @@ ImpactPoint VSImpact(float3 position : POSITION) {
 }
 
 [maxvertexcount(4)]
-void GSImpact(point ImpactPoint input[1], inout TriangleStream<ImpactPixel> stream) {
-    const float2 corners[4] = {
-        float2(0, 0), float2(0, 1),
-        float2(1, 0), float2(1, 1)
-    };
+void GSImpact(point ImpactPoint input[1], inout TriangleStream<BillboardPixel> stream) {
     for (uint i = 0; i < 4; ++i) {
-        const float2 uv = corners[i];
+        const float2 uv = billboardUV[i];
         const float3 offset = float3(uv.x - 0.5f, 0.5f - uv.y, 0);
-        ImpactPixel output;
+        BillboardPixel output;
         output.position = mul(float4(input[0].position + offset, 1), worldViewProjection);
         output.uv = uv;
         stream.Append(output);
     }
 }
 
-float4 PSImpact(ImpactPixel input) : SV_TARGET {
+float4 PSImpact(BillboardPixel input) : SV_TARGET {
     // 4×4 텍스처에서 경과 시간에 해당하는 프레임을 고른다.
     const uint frame = min((uint)(saturate(animationProgress) * 16.0f), 15u);
     const float2 tile = float2(frame % 4u, frame / 4u);
     const float2 atlasUV = (tile + input.uv) * 0.25f;
     return surfaceTexture.Sample(surfaceSampler, atlasUV);
+}
+
+struct TreePoint {
+    float3 center : POSITION;
+    float2 size : TEXCOORD0;
+};
+
+TreePoint VSTree(float3 center : POSITION, float2 size : TEXCOORD0) {
+    TreePoint output;
+    output.center = center;
+    output.size = size;
+    return output;
+}
+
+[maxvertexcount(4)]
+void GSTree(point TreePoint input[1], inout TriangleStream<BillboardPixel> stream) {
+    const float3 center = input[0].center;
+    const float2 size = input[0].size;
+    // 수직축을 유지한 채 카메라 방향에 맞춰 가로축을 구한다.
+    const float3 up = float3(0, 1, 0);
+    const float3 forward = float3(center.x - cameraPosition.x, 0, center.z - cameraPosition.z);
+    const float3 right = dot(forward, forward) > 0.000001f
+        ? normalize(cross(up, forward))
+        : float3(1, 0, 0);
+
+    for (uint i = 0; i < 4; ++i) {
+        const float2 uv = billboardUV[i];
+        const float3 offset = right * ((uv.x - 0.5f) * size.x) + up * ((0.5f - uv.y) * size.y);
+        BillboardPixel output;
+        output.position = mul(float4(center + offset, 1), worldViewProjection);
+        output.uv = uv;
+        stream.Append(output);
+    }
+}
+
+float4 PSTree(BillboardPixel input) : SV_TARGET {
+    const float4 texel = surfaceTexture.Sample(surfaceSampler, input.uv);
+    clip(texel.a - 0.5f);
+    return float4(texel.rgb, 1);
 }
