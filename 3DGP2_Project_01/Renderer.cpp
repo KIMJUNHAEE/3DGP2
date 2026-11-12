@@ -177,7 +177,8 @@ void Renderer::MakePipeline() {
     params[1].DescriptorTable = { 1, &textureRange };
     params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
-    D3D12_STATIC_SAMPLER_DESC sampler{};
+    D3D12_STATIC_SAMPLER_DESC samplers[2]{};
+    auto& sampler = samplers[0];
     sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
     sampler.AddressU = sampler.AddressV = sampler.AddressW =
         D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
@@ -187,8 +188,16 @@ void Renderer::MakePipeline() {
     sampler.ShaderRegister = 0;  // 텍스처 샘플러 레지스터 s0
     sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
+    auto& terrainSampler = samplers[1];
+    terrainSampler = sampler;
+    terrainSampler.Filter = D3D12_FILTER_ANISOTROPIC;
+    terrainSampler.MaxAnisotropy = 8;
+    terrainSampler.AddressU = terrainSampler.AddressV = terrainSampler.AddressW =
+        D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    terrainSampler.ShaderRegister = 1;  // 지형 반복 샘플러 레지스터 s1
+
     D3D12_ROOT_SIGNATURE_DESC rootDesc{
-        _countof(params), params, 1, &sampler,
+        _countof(params), params, _countof(samplers), samplers,
         D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT
     };
 
@@ -203,6 +212,7 @@ void Renderer::MakePipeline() {
     const auto ps = Compile("PSMain", "ps_5_0");
     const auto psFont = Compile("PSFont", "ps_5_0");
     const auto psModel = Compile("PSModel", "ps_5_0");
+    const auto psTerrain = Compile("PSTerrain", "ps_5_0");
     const auto vsImpact = Compile("VSImpact", "vs_5_0");
     const auto gsImpact = Compile("GSImpact", "gs_5_0");
     const auto psImpact = Compile("PSImpact", "ps_5_0");
@@ -252,6 +262,7 @@ void Renderer::MakePipeline() {
         auto* pixelShader = ps.Get();
         if (pass == Pass::Font) pixelShader = psFont.Get();
         if (pass == Pass::Model) pixelShader = psModel.Get();
+        if (pass == Pass::Terrain) pixelShader = psTerrain.Get();
         if (impact) {
             vertexShader = vsImpact.Get();
             geometryShader = gsImpact.Get();
@@ -299,7 +310,8 @@ void Renderer::LoadTextures() {
         {L"Texture/Skybox/Top.dds", "Skybox Top.dds를 불러오지 못했음"},
         {L"Texture/Skybox/Bottom.dds", "Skybox Bottom.dds를 불러오지 못했음"},
         {L"Texture/Skybox/Front.dds", "Skybox Front.dds를 불러오지 못했음"},
-        {L"Texture/Skybox/Back.dds", "Skybox Back.dds를 불러오지 못했음"}
+        {L"Texture/Skybox/Back.dds", "Skybox Back.dds를 불러오지 못했음"},
+        {L"Texture/Terrain.dds", "Terrain.dds를 불러오지 못했음"}
     };
     static_assert(_countof(files) == textureCount);
 

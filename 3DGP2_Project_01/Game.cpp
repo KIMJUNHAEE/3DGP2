@@ -86,7 +86,8 @@ private:
     bool IsLevel() const { return scene >= Scene::Level1; }
 
     Renderer renderer;
-    Mesh box, sphere, terrain, impactPoint, treePoints;
+    Mesh box, sphere, impactPoint, treePoints;
+    Terrain terrain;
     std::array<Mesh, 3> tank, helicopter;
     std::array<Mesh, 6> skyFaces;
     Mesh title, introHint, menuTitle, winText, lostText, goalText, tutorial;
@@ -113,7 +114,7 @@ void Game::Init(HWND window) {
     box = MakeBox(renderer);
     skyFaces = MakeSkyboxFaces(renderer);
     sphere = MakeSphere(renderer);
-    terrain = MakeTerrain(renderer);
+    terrain.Load(renderer, "Assets/Terrain/HeightMap.raw");
     impactPoint = renderer.MakeMesh({Vertex{{0, 0, 0}, {0, 0, 0}}});
     tank = {
         LoadObj(renderer, "Assets/Tank/T04_Hull_LOD0.obj"),
@@ -185,7 +186,7 @@ void Game::Enter(Scene next) {
     automatic = shield = firstPerson = firePressed = false;
 
     if (IsLevel()) {
-        player.position = {0, IsHelicopter() ? 10.f : GroundHeight(0, -9), -9};
+        player.position = {0, IsHelicopter() ? 10.f : terrain.HeightAt(0, -9), -9};
         if (scene == Scene::Level1) {
             for (int index = 0; index < 9; ++index) {
                 Unit balloon;
@@ -198,7 +199,7 @@ void Game::Enter(Scene next) {
                 Unit enemy;
                 const float x = float(index % 5 - 2) * 9;
                 const float z = 15.f + float(index / 5) * 13;
-                enemy.position = {x, GroundHeight(x, z), z};
+                enemy.position = {x, terrain.HeightAt(x, z), z};
                 enemy.hp = 3;
                 enemy.fireTimer = 1.5f + float(index % 6) * .6f;
                 enemies.push_back(enemy);
@@ -215,7 +216,7 @@ void Game::Enter(Scene next) {
             const float x = position(placement), z = position(placement);
             if (std::abs(x) < 24 && z > -20 && z < 53) continue;
             const float scale = size(placement);
-            const float ground = GroundHeight(x, z);
+            const float ground = terrain.HeightAt(x, z);
             obstacles.push_back({{x, ground + scale * .5f, z}, scale});
 
             const float height = scale * 2.4f;
@@ -260,7 +261,7 @@ void Game::UpdateCamera() {
         } else {
             from = position - forward * (IsHelicopter() ? 14.f : 12.f) + XMVectorSet(0, IsHelicopter() ? 5.2f : 6.4f, 0, 0);
             XMFLOAT3 p = Store(from);
-            p.y = std::max(p.y, GroundHeight(p.x, p.z) + 2.f);
+            p.y = std::max(p.y, terrain.HeightAt(p.x, p.z) + 2.f);
             from = Vec(p);
             to = position + forward * 11.f + XMVectorSet(0, 1.9f + pitch * 13.f, 0, 0);
         }
@@ -399,7 +400,8 @@ void Game::UpdateShots(float dt) {
 
         XMFLOAT3 impact;
         if (hit == -1) {
-            const float ground = GroundHeight(shot.position.x, shot.position.z);
+            if (!terrain.Contains(shot.position.x, shot.position.z)) continue;
+            const float ground = terrain.HeightAt(shot.position.x, shot.position.z);
             if (shot.position.y > ground) continue;
             impact = {shot.position.x, ground + .2f, shot.position.z};
         } else {
@@ -441,7 +443,7 @@ void Game::Update(float dt) {
         XMFLOAT3 next = Store(Vec(player.position) + movement * (heli ? 16.f : 9.f) * dt);
         next.x = std::clamp(next.x, -76.f, 76.f);
         next.z = std::clamp(next.z, -76.f, 76.f);
-        const float ground = GroundHeight(next.x, next.z);
+        const float ground = terrain.HeightAt(next.x, next.z);
         if (heli) {
             const float lift = float(Held('E')) - float(Held('Q'));
             next.y = std::clamp(next.y + lift * dt * 9.f, ground + 3.f, 45.f);
@@ -591,7 +593,8 @@ void Game::Render() {
         renderer.BindTexture(TextureId::Tutorial);
         renderer.Draw(tutorial, XMMatrixTranslation(0, 0.1f, 0), {1, 1, 1, 1}, Pass::Font);
     } else {
-        renderer.Draw(terrain, XMMatrixIdentity(), {.36f, .49f, .3f, 1});
+        renderer.BindTexture(TextureId::Terrain);
+        renderer.Draw(terrain.GetMesh(), XMMatrixIdentity(), {1, 1, 1, 1}, Pass::Terrain);
         renderer.BindTexture(TextureId::Tree);
         renderer.Draw(treePoints, XMMatrixIdentity(), {1, 1, 1, 1}, Pass::Tree);
         for (size_t index = 0; index < enemies.size(); ++index) {
@@ -628,7 +631,7 @@ void Game::Render() {
             renderer.Draw(skyFaces[face], world, {1, 1, 1, 1}, Pass::Skybox);
         }
         if (scene == Scene::Level1) {
-            const float ground = GroundHeight(0, 65);
+            const float ground = terrain.HeightAt(0, 65);
             renderer.Draw(box, XMMatrixScaling(10, .4f, 10) * XMMatrixTranslation(0, ground, 65), Mint);
             renderer.Draw(box, XMMatrixScaling(4, 12, 4) * XMMatrixTranslation(0, ground + 6, 65),
                 {.15f, 1.f, .63f, .16f}, Pass::Alpha);

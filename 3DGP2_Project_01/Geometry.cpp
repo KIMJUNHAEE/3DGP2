@@ -66,30 +66,67 @@ Mesh MakeSphere(Renderer& renderer) {
     return renderer.MakeMesh(vertices);
 }
 
-float GroundHeight(float x, float z) {
-    const float edge = std::clamp((std::max(std::abs(x), std::abs(z)) - 76.f) / 32.f, 0.f, 1.f);
-    return .8f * std::sin(x * .075f) * std::cos(z * .056f) +
-        .45f * std::sin((x + z) * .091f) + edge * edge * (10.f + 5.f * std::sin(x * .16f + z * .1f));
+float Terrain::SampleHeight(int column, int row) const {
+    column = std::clamp(column, 0, SamplesPerSide - 1);
+    row = std::clamp(row, 0, SamplesPerSide - 1);
+    constexpr float minHeight = -1.5f;
+    constexpr float heightPerByte = 18.0f / 255.0f;
+    return minHeight + heights[row * SamplesPerSide + column] * heightPerByte;
 }
 
-Mesh MakeTerrain(Renderer& renderer) {
-    std::vector<Vertex> vertices;
-    auto vertex = [](float x, float z) {
+bool Terrain::Contains(float x, float z) const {
+    return std::abs(x) <= HalfExtent && std::abs(z) <= HalfExtent;
+}
+
+float Terrain::HeightAt(float x, float z) const {
+    constexpr int lastCell = SamplesPerSide - 2;
+    constexpr float lastSample = static_cast<float>(SamplesPerSide - 1);
+    const float gridX = std::clamp((x + HalfExtent) / CellSize, 0.0f, lastSample);
+    const float gridZ = std::clamp((z + HalfExtent) / CellSize, 0.0f, lastSample);
+    const int column = std::min(static_cast<int>(gridX), lastCell);
+    const int row = std::min(static_cast<int>(gridZ), lastCell);
+    const float u = gridX - column, v = gridZ - row;
+    const float b = SampleHeight(column + 1, row);
+    const float c = SampleHeight(column, row + 1);
+
+    // 메시와 같은 대각선을 기준으로 높이를 보간한다.
+    if (u + v <= 1.0f) {
+        const float a = SampleHeight(column, row);
+        return a + (b - a) * u + (c - a) * v;
+    }
+    const float d = SampleHeight(column + 1, row + 1);
+    return d + (c - d) * (1.0f - u) + (b - d) * (1.0f - v);
+}
+
+void Terrain::Load(Renderer& renderer, const char* path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file) throw std::runtime_error(std::string("지형 RAW 파일을 열지 못했음\n") + path);
+    // RAW 파일은 헤더 없이 Z 행마다 X 방향 높이 샘플을 저장한다.
+    if (!file.read(reinterpret_cast<char*>(heights.data()), static_cast<std::streamsize>(heights.size())) ||
+        file.peek() != std::char_traits<char>::eof()) {
+        throw std::runtime_error(std::string("지형 RAW 파일 크기가 맞지 않음\n") + path);
+    }
+
+    const auto vertex = [this](int column, int row) {
+        const float x = column * CellSize - HalfExtent;
+        const float z = row * CellSize - HalfExtent;
         XMFLOAT3 normal;
         XMStoreFloat3(&normal, XMVector3Normalize(XMVectorSet(
-            GroundHeight(x - .1f, z) - GroundHeight(x + .1f, z), .2f,
-            GroundHeight(x, z - .1f) - GroundHeight(x, z + .1f), 0)));
-        return Vertex{{x, GroundHeight(x, z), z}, normal};
+            SampleHeight(column - 1, row) - SampleHeight(column + 1, row), 2.0f * CellSize,
+            SampleHeight(column, row - 1) - SampleHeight(column, row + 1), 0)));
+        constexpr float tileSize = 12.0f;
+        return Vertex{{x, SampleHeight(column, row), z}, normal, {x / tileSize, z / tileSize}};
     };
-    constexpr int step = 2;
-    for (int z = -112; z < 112; z += step) {
-        for (int x = -112; x < 112; x += step) {
-            const auto a = vertex(float(x), float(z)), b = vertex(float(x + step), float(z));
-            const auto c = vertex(float(x), float(z + step)), d = vertex(float(x + step), float(z + step));
+    std::vector<Vertex> vertices;
+    vertices.reserve((SamplesPerSide - 1) * (SamplesPerSide - 1) * 6);
+    for (int row = 0; row < SamplesPerSide - 1; ++row) {
+        for (int column = 0; column < SamplesPerSide - 1; ++column) {
+            const auto a = vertex(column, row), b = vertex(column + 1, row);
+            const auto c = vertex(column, row + 1), d = vertex(column + 1, row + 1);
             vertices.insert(vertices.end(), {a,b,c,c,b,d});
         }
     }
-    return renderer.MakeMesh(vertices);
+    mesh = renderer.MakeMesh(vertices);
 }
 
 Mesh LoadObj(Renderer& renderer, const char* path) {

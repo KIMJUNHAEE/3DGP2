@@ -38,6 +38,7 @@ float4 PSMain(Pixel input) : SV_TARGET {
 
 Texture2D surfaceTexture : register(t0);
 SamplerState surfaceSampler : register(s0);
+SamplerState terrainSampler : register(s1);
 
 float4 PSFont(Pixel input) : SV_TARGET {
     return surfaceTexture.Sample(surfaceSampler, input.uv) * color;
@@ -46,6 +47,11 @@ float4 PSFont(Pixel input) : SV_TARGET {
 float4 PSModel(Pixel input) : SV_TARGET {
     const float3 baseColor = surfaceTexture.Sample(surfaceSampler, input.uv).rgb;
     return float4(baseColor * color.rgb * SurfaceLight(input.normal), 1);
+}
+
+float4 PSTerrain(Pixel input) : SV_TARGET {
+    const float3 baseColor = surfaceTexture.Sample(terrainSampler, input.uv).rgb;
+    return float4(baseColor * SurfaceLight(input.normal), 1);
 }
 
 struct ImpactPoint {
