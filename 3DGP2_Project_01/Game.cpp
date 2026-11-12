@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <random>
 #include <stdexcept>
+#include <string>
 
 namespace {
 enum class Scene { Intro, Menu, Tutorial, Level1, Level2, Level3 };
@@ -612,14 +613,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         windowClass.lpfnWndProc = WindowProc;
         windowClass.lpszClassName = L"3DGP2_Project_01_Window";
         windowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-        if (!RegisterClassW(&windowClass)) throw std::runtime_error("Could not register the game window.");
+        if (!RegisterClassW(&windowClass)) throw std::runtime_error("Window Class를 등록하지 못했음");
         constexpr DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
         RECT bounds{0, 0, Width, Height};
         AdjustWindowRect(&bounds, style, FALSE);
         HWND window = CreateWindowW(windowClass.lpszClassName, L"3D Game Programming 1 - Assignment 4",
             style, CW_USEDEFAULT, CW_USEDEFAULT, bounds.right - bounds.left, bounds.bottom - bounds.top,
             nullptr, nullptr, instance, nullptr);
-        if (!window) throw std::runtime_error("Could not create the game window.");
+        if (!window) throw std::runtime_error("게임 창을 만들지 못했음");
 
         Game game;
         game.Init(window);
@@ -650,7 +651,21 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         if (IsWindow(window)) DestroyWindow(window);
     } catch (const std::exception& error) {
         activeGame = nullptr;
-        MessageBoxA(nullptr, error.what(), "Assignment 4 error", MB_OK | MB_ICONERROR);
+        UINT codePage = CP_UTF8;
+        DWORD flags = MB_ERR_INVALID_CHARS;
+        int length = MultiByteToWideChar(codePage, flags, error.what(), -1, nullptr, 0);
+        if (length == 0) {
+            codePage = CP_ACP;
+            flags = 0;
+            length = MultiByteToWideChar(codePage, flags, error.what(), -1, nullptr, 0);
+        }
+        std::wstring message = L"게임 실행 중 오류가 발생했음";
+        if (length > 1) {
+            message.resize(length);
+            if (MultiByteToWideChar(codePage, flags, error.what(), -1, message.data(), length) == 0)
+                message = L"오류 메시지를 읽지 못했음";
+        }
+        MessageBoxW(nullptr, message.c_str(), L"3DGP2 오류", MB_OK | MB_ICONERROR);
         status = 1;
     }
     return status;

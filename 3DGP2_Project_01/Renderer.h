@@ -38,10 +38,11 @@ public:
 
 private:
     ComPtr<ID3D12Resource> UploadBuffer(UINT64 bytes);
+    void ResetCommands();
+    void SubmitCommands();
     void WaitForGpu();
     void MakePipeline();
-    D3D12_CPU_DESCRIPTOR_HANDLE Cpu(ID3D12DescriptorHeap* heap, unsigned index,
-        D3D12_DESCRIPTOR_HEAP_TYPE type);
+    D3D12_CPU_DESCRIPTOR_HANDLE Cpu(ID3D12DescriptorHeap* heap, unsigned index, D3D12_DESCRIPTOR_HEAP_TYPE type);
 
     ComPtr<ID3D12Device> device;
     ComPtr<ID3D12CommandQueue> queue;
@@ -57,5 +58,8 @@ private:
     ComPtr<ID3D12PipelineState> pipeline[static_cast<int>(Pass::Count)];
     unsigned backBuffer = 0;
     Pass currentPass = Pass::Count;
+
+    void LoadFontAtlas();
+    ComPtr<ID3D12Resource> fontAtlas;
 };
 

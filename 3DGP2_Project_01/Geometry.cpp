@@ -40,7 +40,7 @@ struct FontBitmap {
             DEFAULT_PITCH, L"Malgun Gothic");
         if (!dc || !bitmap || !font) {
             Release();
-            throw std::runtime_error("Could not create the Windows font bitmap.");
+            throw std::runtime_error("Windows Font Bitmap을 만들지 못했음");
         }
         oldBitmap = SelectObject(dc, bitmap);
         oldFont = SelectObject(dc, font);
@@ -116,7 +116,7 @@ Mesh MakeTerrain(Renderer& renderer) {
 
 Mesh LoadObj(Renderer& renderer, const char* path) {
     std::ifstream file(path);
-    if (!file) throw std::runtime_error(std::string("Could not open OBJ: ") + path);
+    if (!file) throw std::runtime_error(std::string("OBJ 파일을 열지 못했음\n") + path);
     std::vector<XMFLOAT3> positions, normals;
     std::vector<Vertex> vertices;
     std::string line;
@@ -137,7 +137,7 @@ Mesh LoadObj(Renderer& renderer, const char* path) {
                 std::istringstream indices(corner);
                 unsigned p = 0, uv = 0, n = 0;
                 if (!(indices >> p >> uv >> n) || !p || !uv || !n)
-                    throw std::runtime_error("Expected the supplied OBJ v/vt/vn face format.");
+                    throw std::runtime_error("OBJ Face 데이터가 v/vt/vn 형식이 아님");
                 face.push_back({positions.at(p - 1), normals.at(n - 1)});
             }
             for (size_t i = 1; i + 1 < face.size(); ++i)
