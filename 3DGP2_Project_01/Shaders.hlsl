@@ -126,3 +126,13 @@ float4 PSTree(BillboardPixel input) : SV_TARGET {
     clip(texel.a - 0.5f);
     return float4(texel.rgb, 1);
 }
+
+Pixel VSSkybox(float3 position : POSITION, float2 uv : TEXCOORD0) {
+    const float4 clipPosition = mul(float4(position, 1), worldViewProjection);
+    Pixel output;
+    // 원근 나눗셈 후 깊이를 1로 만들어 하늘을 가장 멀리 그린다.
+    output.position = clipPosition.xyww;
+    output.normal = float3(0, 0, 0);
+    output.uv = uv;
+    return output;
+}

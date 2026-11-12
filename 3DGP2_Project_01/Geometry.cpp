@@ -14,22 +14,38 @@ void Quad(std::vector<Vertex>& vertices, const XMFLOAT3& topLeft, const XMFLOAT3
     const Vertex c{bottomLeft, normal}, d{bottomRight, normal};
     vertices.insert(vertices.end(), {a, b, c, c, b, d});
 }
-
-void Box(std::vector<Vertex>& vertices, float left, float right, float bottom, float top, float front, float back) {
-    Quad(vertices, {left,top,front}, {right,top,front}, {left,bottom,front}, {right,bottom,front}, {0,0,-1});
-    Quad(vertices, {right,top,back}, {left,top,back}, {right,bottom,back}, {left,bottom,back}, {0,0,1});
-    Quad(vertices, {left,top,back}, {left,top,front}, {left,bottom,back}, {left,bottom,front}, {-1,0,0});
-    Quad(vertices, {right,top,front}, {right,top,back}, {right,bottom,front}, {right,bottom,back}, {1,0,0});
-    Quad(vertices, {left,top,back}, {right,top,back}, {left,top,front}, {right,top,front}, {0,1,0});
-    Quad(vertices, {left,bottom,front}, {right,bottom,front}, {left,bottom,back}, {right,bottom,back}, {0,-1,0});
-}
-
 }
 
 Mesh MakeBox(Renderer& renderer) {
+    constexpr float low = -.5f, high = .5f;
     std::vector<Vertex> vertices;
-    Box(vertices, -.5f, .5f, -.5f, .5f, -.5f, .5f);
+    Quad(vertices, {low,high,low}, {high,high,low}, {low,low,low}, {high,low,low}, {0,0,-1});
+    Quad(vertices, {high,high,high}, {low,high,high}, {high,low,high}, {low,low,high}, {0,0,1});
+    Quad(vertices, {low,high,high}, {low,high,low}, {low,low,high}, {low,low,low}, {-1,0,0});
+    Quad(vertices, {high,high,low}, {high,high,high}, {high,low,low}, {high,low,high}, {1,0,0});
+    Quad(vertices, {low,high,high}, {high,high,high}, {low,high,low}, {high,high,low}, {0,1,0});
+    Quad(vertices, {low,low,low}, {high,low,low}, {low,low,high}, {high,low,high}, {0,-1,0});
     return renderer.MakeMesh(vertices);
+}
+
+std::array<Mesh, 6> MakeSkyboxFaces(Renderer& renderer) {
+    // 면마다 왼쪽 위, 오른쪽 위, 왼쪽 아래, 오른쪽 아래 순서로 배치한다.
+    constexpr XMFLOAT3 corners[6][4] = {
+        {{1, 1, 1}, {1, 1, -1}, {1, -1, 1}, {1, -1, -1}},     // 오른쪽
+        {{-1, 1, -1}, {-1, 1, 1}, {-1, -1, -1}, {-1, -1, 1}}, // 왼쪽
+        {{-1, 1, -1}, {1, 1, -1}, {-1, 1, 1}, {1, 1, 1}},     // 위
+        {{-1, -1, 1}, {1, -1, 1}, {-1, -1, -1}, {1, -1, -1}}, // 아래
+        {{-1, 1, 1}, {1, 1, 1}, {-1, -1, 1}, {1, -1, 1}},     // 앞
+        {{1, 1, -1}, {-1, 1, -1}, {1, -1, -1}, {-1, -1, -1}}  // 뒤
+    };
+    std::array<Mesh, 6> faces;
+    for (size_t i = 0; i < faces.size(); ++i) {
+        const auto& face = corners[i];
+        const Vertex a{face[0], {}, {0, 0}}, b{face[1], {}, {1, 0}};
+        const Vertex c{face[2], {}, {0, 1}}, d{face[3], {}, {1, 1}};
+        faces[i] = renderer.MakeMesh({a, b, c, c, b, d});
+    }
+    return faces;
 }
 
 Mesh MakeSphere(Renderer& renderer) {
@@ -118,10 +134,9 @@ TextMesh MakeTexturedQuad(Renderer& renderer, float width, float height,
     float u0, float v0, float u1, float v1) {
     const float x = width / 2.0f;
     const float y = height / 2.0f;
-    const XMFLOAT3 normal{0, 0, -1};
-    const Vertex a{{-x,  y, 0}, normal, {u0, v0}};
-    const Vertex b{{ x,  y, 0}, normal, {u1, v0}};
-    const Vertex c{{-x, -y, 0}, normal, {u0, v1}};
-    const Vertex d{{ x, -y, 0}, normal, {u1, v1}};
+    const Vertex a{{-x,  y, 0}, {}, {u0, v0}};
+    const Vertex b{{ x,  y, 0}, {}, {u1, v0}};
+    const Vertex c{{-x, -y, 0}, {}, {u0, v1}};
+    const Vertex d{{ x, -y, 0}, {}, {u1, v1}};
     return {renderer.MakeMesh({a, b, c, c, b, d}), width, height};
 }

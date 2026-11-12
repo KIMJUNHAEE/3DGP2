@@ -42,12 +42,8 @@ struct Unit {
 };
 struct Shot {
     XMFLOAT3 position, velocity;
-    float remaining = 3.f;
+    float remaining;
     bool friendly;
-};
-struct Fragment {
-    XMFLOAT3 position, velocity;
-    float age, life, size;
 };
 struct Impact {
     XMFLOAT3 position;
@@ -74,11 +70,9 @@ private:
     void UpdateCamera();
     void Fire(const XMFLOAT3& origin, FXMVECTOR direction, bool friendly);
     void UpdateShots(float dt);
-    void SpawnMuzzleFragments(const XMFLOAT3& position);
     void SpawnImpact(const XMFLOAT3& position, float size, bool large);
     void DrawTank(const Unit& unit, float hullYaw, bool friendly);
     void DrawHelicopter();
-    void DrawFragments();
     void DrawImpacts();
     void DrawHealthLabels();
     void DrawHealthNumber(int hp, const XMMATRIX& world, const XMFLOAT4& color);
@@ -90,21 +84,20 @@ private:
     XMFLOAT3 PlayerCenter() const;
     bool IsHelicopter() const { return scene == Scene::Level1 || scene == Scene::Level3; }
     bool IsLevel() const { return scene >= Scene::Level1; }
-    int Remaining() const;
 
     Renderer renderer;
     Mesh box, sphere, terrain, impactPoint, treePoints;
     std::array<Mesh, 3> tank, helicopter;
-    TextMesh title{}, name{}, introHint{}, menuTitle{}, winText{}, lostText{}, goalText{};
+    std::array<Mesh, 6> skyFaces;
+    Mesh title, introHint, menuTitle, winText, lostText, goalText, tutorial;
+    TextMesh name{};
     std::array<TextMesh, 6> menu;
     std::array<Mesh, 10> healthDigits;
-    TextMesh tutorial{};
     Scene scene = Scene::Intro;
     Result result = Result::Playing;
     Unit player;
     std::vector<Unit> enemies, balloons;
     std::vector<Shot> shots;
-    std::vector<Fragment> fragments;
     std::vector<Impact> impacts;
     std::vector<Obstacle> obstacles;
     XMMATRIX view = XMMatrixIdentity();
@@ -113,12 +106,12 @@ private:
     int target = -1;
     bool introExploding = false;
     bool automatic = false, shield = false, firstPerson = false, firePressed = false;
-    std::mt19937 random{42};
 };
 
 void Game::Init(HWND window) {
     renderer.Init(window);
     box = MakeBox(renderer);
+    skyFaces = MakeSkyboxFaces(renderer);
     sphere = MakeSphere(renderer);
     terrain = MakeTerrain(renderer);
     impactPoint = renderer.MakeMesh({Vertex{{0, 0, 0}, {0, 0, 0}}});
@@ -133,17 +126,17 @@ void Game::Init(HWND window) {
         LoadObj(renderer, "Assets/Helicopter/H04_TailRotor_LOD0.obj")
     };
     // IntroText.dds에서 제목, 이름, 안내 문구에 각각 다른 UV 영역을 사용한다.
-    title = MakeTexturedQuad(renderer, 14.0f, 3.5f, 0.5f, 0.125f, 1.0f, 0.375f);
+    title = MakeTexturedQuad(renderer, 14.0f, 3.5f, 0.5f, 0.125f, 1.0f, 0.375f).mesh;
     name = MakeTexturedQuad(renderer, 4.6f, 2.3f, 0.0f, 0.0f, 0.5f, 0.5f);
-    introHint = MakeTexturedQuad(renderer, 10.4f, 2.6f, 0.0f, 0.5f, 1.0f, 1.0f);
-    menuTitle = MakeTexturedQuad(renderer, 9.6f, 2.4f, 0.0f, 0.0f, 1.0f, 0.125f);
+    introHint = MakeTexturedQuad(renderer, 10.4f, 2.6f, 0.0f, 0.5f, 1.0f, 1.0f).mesh;
+    menuTitle = MakeTexturedQuad(renderer, 9.6f, 2.4f, 0.0f, 0.0f, 1.0f, 0.125f).mesh;
     // GameText.dds의 세 줄을 각각 하나의 사각형에 매핑한다.
     constexpr float gameTextWidth = 14.0f;
     constexpr float gameTextHeight = gameTextWidth / 6.0f;
     constexpr float textRow = 1.0f / 3.0f;
-    winText = MakeTexturedQuad(renderer, gameTextWidth, gameTextHeight, 0, 0, 1, textRow);
-    lostText = MakeTexturedQuad(renderer, gameTextWidth, gameTextHeight, 0, textRow, 1, 2 * textRow);
-    goalText = MakeTexturedQuad(renderer, gameTextWidth, gameTextHeight, 0, 2 * textRow, 1, 1);
+    winText = MakeTexturedQuad(renderer, gameTextWidth, gameTextHeight, 0, 0, 1, textRow).mesh;
+    lostText = MakeTexturedQuad(renderer, gameTextWidth, gameTextHeight, 0, textRow, 1, 2 * textRow).mesh;
+    goalText = MakeTexturedQuad(renderer, gameTextWidth, gameTextHeight, 0, 2 * textRow, 1, 1).mesh;
 
     // 투명 여백을 잘라 클릭 범위를 각 메뉴 항목의 글자 크기에 맞춘다.
     constexpr float menuHalfWidths[] = {168, 148, 148, 148, 108, 78};
@@ -157,7 +150,7 @@ void Game::Init(HWND window) {
             0.5f - uOffset, (rowTop + 26.0f) / 1024.0f,
             0.5f + uOffset, (rowTop + 102.0f) / 1024.0f);
     }
-    tutorial = MakeTexturedQuad(renderer, 30.72f, 9.6f, 0.0f, 0.0f, 1.0f, 1.0f);
+    tutorial = MakeTexturedQuad(renderer, 30.72f, 9.6f, 0.0f, 0.0f, 1.0f, 1.0f).mesh;
 
     // 숫자마다 4×4 아틀라스에서 사용할 UV 영역을 지정한다.
     constexpr float digitCell = .25f;
@@ -181,7 +174,6 @@ void Game::Enter(Scene next) {
     time = 0;
     introExploding = false;
     shots.clear();
-    fragments.clear();
     impacts.clear();
     enemies.clear();
     balloons.clear();
@@ -363,20 +355,6 @@ void Game::Fire(const XMFLOAT3& origin, FXMVECTOR direction, bool friendly) {
     const XMVECTOR unit = XMVector3Normalize(direction);
     const float speed = friendly ? 43.f : 19.f;
     shots.push_back({origin, Store(unit * speed), 3.f, friendly});
-    SpawnMuzzleFragments(origin);
-}
-
-void Game::SpawnMuzzleFragments(const XMFLOAT3& position) {
-    constexpr int count = 7;
-    constexpr float size = .55f;
-    constexpr float speed = size * 1.8f;
-    std::uniform_real_distribution<float> variation(-1.f, 1.f);
-    for (int index = 0; index < count && fragments.size() < 240; ++index) {
-        const XMFLOAT3 velocity{variation(random) * speed, (.6f + variation(random) * .5f) * speed,
-            variation(random) * speed};
-        const float life = .42f + variation(random) * .12f;
-        fragments.push_back({position, velocity, 0, life, .08f + size * .11f});
-    }
 }
 
 void Game::SpawnImpact(const XMFLOAT3& position, float size, bool large) {
@@ -384,6 +362,8 @@ void Game::SpawnImpact(const XMFLOAT3& position, float size, bool large) {
 }
 
 void Game::UpdateShots(float dt) {
+    const bool balloonLevel = scene == Scene::Level1;
+    auto& victims = balloonLevel ? balloons : enemies;
     for (auto& shot : shots) {
         const XMVECTOR previous = Vec(shot.position);
         const XMVECTOR velocity = Vec(shot.velocity);
@@ -406,12 +386,10 @@ void Game::UpdateShots(float dt) {
                 hit = id;
             }
         };
-        auto& victims = scene == Scene::Level1 ? balloons : enemies;
         if (shot.friendly) {
             for (size_t index = 0; index < victims.size(); ++index) {
                 if (!victims[index].hp) continue;
-                const bool balloon = scene == Scene::Level1;
-                test(balloon ? BalloonCenter(index) : EnemyCenter(index), balloon ? 1.35f : 2.05f,
+                test(balloonLevel ? BalloonCenter(index) : EnemyCenter(index), balloonLevel ? 1.35f : 2.05f,
                     static_cast<int>(index));
             }
         } else if (player.hp > 0) {
@@ -419,11 +397,13 @@ void Game::UpdateShots(float dt) {
         }
         for (const auto& obstacle : obstacles) test(obstacle.position, obstacle.size * .62f, -3);
 
-        if (hit == -1 && shot.position.y > GroundHeight(shot.position.x, shot.position.z)) continue;
-        XMFLOAT3 impact = Store(previous + direction * (nearest - .06f));
+        XMFLOAT3 impact;
         if (hit == -1) {
-            impact = shot.position;
-            impact.y = GroundHeight(impact.x, impact.z) + .2f;
+            const float ground = GroundHeight(shot.position.x, shot.position.z);
+            if (shot.position.y > ground) continue;
+            impact = {shot.position.x, ground + .2f, shot.position.z};
+        } else {
+            impact = Store(previous + direction * (nearest - .06f));
         }
         shot.remaining = 0;
         if (hit >= 0) {
@@ -443,20 +423,8 @@ void Game::UpdateShots(float dt) {
         [](const Shot& shot) { return shot.remaining <= 0; }), shots.end());
 }
 
-int Game::Remaining() const {
-    const auto& units = scene == Scene::Level1 ? balloons : enemies;
-    return static_cast<int>(std::count_if(units.begin(), units.end(), [](const Unit& unit) { return unit.hp > 0; }));
-}
-
 void Game::Update(float dt) {
     time += dt;
-    for (auto& fragment : fragments) {
-        fragment.age += dt;
-        fragment.position = Store(Vec(fragment.position) + Vec(fragment.velocity) * dt);
-        fragment.velocity.y -= 10.f * dt;
-    }
-    fragments.erase(std::remove_if(fragments.begin(), fragments.end(),
-        [](const Fragment& fragment) { return fragment.age >= fragment.life; }), fragments.end());
     impacts.erase(std::remove_if(impacts.begin(), impacts.end(),
         [this](const Impact& impact) { return time - impact.start >= impact.duration; }), impacts.end());
     if (scene == Scene::Intro && introExploding && impacts.empty()) Enter(Scene::Menu);
@@ -487,7 +455,6 @@ void Game::Update(float dt) {
             if (blocked) next = player.position;
         }
         player.position = next;
-        UpdateCamera();
 
         const bool lock = !heli && automatic && target >= 0;
         player.turret = lock ? YawTo(player.position, enemies[target].position) : yaw;
@@ -516,8 +483,14 @@ void Game::Update(float dt) {
             enemy.fireTimer = 3.4f + float(index % 3) * .24f;
         }
         UpdateShots(dt);
-        if (scene == Scene::Level1 && GroundDistance(player.position, {0, 0, 65}) < 5.f) Enter(Scene::Level2);
-        else if (scene != Scene::Level1 && result == Result::Playing && Remaining() == 0) result = Result::Won;
+        if (scene == Scene::Level1 && GroundDistance(player.position, {0, 0, 65}) < 5.f) {
+            Enter(Scene::Level2);
+            return;
+        }
+        if (scene != Scene::Level1 && result == Result::Playing &&
+            std::none_of(enemies.begin(), enemies.end(), [](const Unit& enemy) { return enemy.hp > 0; })) {
+            result = Result::Won;
+        }
     } else {
         shots.clear();
     }
@@ -544,15 +517,6 @@ void Game::DrawHelicopter() {
     renderer.Draw(helicopter[0], body, color, Pass::Model);
     renderer.Draw(helicopter[1], mainRotor, color, Pass::Model);
     renderer.Draw(helicopter[2], tailRotor, color, Pass::Model);
-}
-
-void Game::DrawFragments() {
-    for (const auto& fragment : fragments) {
-        const float size = fragment.size * (1.f - fragment.age / fragment.life);
-        const auto world = XMMatrixScaling(size, size, size) *
-            XMMatrixRotationRollPitchYaw(fragment.age * 6.f, fragment.age * 9.f, 0) * At(fragment.position);
-        renderer.Draw(box, world, Amber);
-    }
 }
 
 XMMATRIX Game::BillboardRotation() const {
@@ -613,19 +577,19 @@ void Game::Render() {
         renderer.BindTexture(TextureId::Intro);
         const auto titleWorld = XMMatrixRotationY(.35f * std::sin(time * 1.6f)) *
             XMMatrixTranslation(0, 2.55f, 0);
-        renderer.Draw(title.mesh, titleWorld, Ice, Pass::Font);
+        renderer.Draw(title, titleWorld, Ice, Pass::Font);
         if (!introExploding) {
             renderer.Draw(name.mesh, IntroName(), Amber, Pass::Font);
-            renderer.Draw(introHint.mesh, XMMatrixTranslation(0, -3.35f, 0), Mint, Pass::Font);
+            renderer.Draw(introHint, XMMatrixTranslation(0, -3.35f, 0), Mint, Pass::Font);
         }
     } else if (scene == Scene::Menu) {
         renderer.BindTexture(TextureId::Menu);
-        renderer.Draw(menuTitle.mesh, XMMatrixTranslation(0, 5.45f, 0), Amber, Pass::Font);
+        renderer.Draw(menuTitle, XMMatrixTranslation(0, 5.45f, 0), Amber, Pass::Font);
         for (size_t index = 0; index < menu.size(); ++index)
             renderer.Draw(menu[index].mesh, MenuItem(index), index == 4 ? Mint : Ice, Pass::Font);
     } else if (scene == Scene::Tutorial) {
         renderer.BindTexture(TextureId::Tutorial);
-        renderer.Draw(tutorial.mesh, XMMatrixTranslation(0, 0.1f, 0), {1, 1, 1, 1}, Pass::Font);
+        renderer.Draw(tutorial, XMMatrixTranslation(0, 0.1f, 0), {1, 1, 1, 1}, Pass::Font);
     } else {
         renderer.Draw(terrain, XMMatrixIdentity(), {.36f, .49f, .3f, 1});
         renderer.BindTexture(TextureId::Tree);
@@ -653,24 +617,29 @@ void Game::Render() {
             renderer.Draw(sphere, XMMatrixScaling(.14f, .14f, .14f) * At(shot.position),
                 shot.friendly ? Amber : Red);
         }
+
+        constexpr std::array<TextureId, 6> skyTextures{
+            TextureId::SkyRight, TextureId::SkyLeft, TextureId::SkyTop,
+            TextureId::SkyBottom, TextureId::SkyFront, TextureId::SkyBack
+        };
+        const auto world = At(renderer.cameraPosition);
+        for (size_t face = 0; face < skyFaces.size(); ++face) {
+            renderer.BindTexture(skyTextures[face]);
+            renderer.Draw(skyFaces[face], world, {1, 1, 1, 1}, Pass::Skybox);
+        }
         if (scene == Scene::Level1) {
             const float ground = GroundHeight(0, 65);
             renderer.Draw(box, XMMatrixScaling(10, .4f, 10) * XMMatrixTranslation(0, ground, 65), Mint);
+            renderer.Draw(box, XMMatrixScaling(4, 12, 4) * XMMatrixTranslation(0, ground + 6, 65),
+                {.15f, 1.f, .63f, .16f}, Pass::Alpha);
+            renderer.BindTexture(TextureId::GameText);
+            const auto goalWorld = XMMatrixRotationY(time * .45f) * XMMatrixTranslation(0, ground + 9, 65);
+            renderer.Draw(goalText, goalWorld, Mint, Pass::Font);
         }
-    }
-
-    DrawFragments();
-    if (scene == Scene::Level1) {
-        const float ground = GroundHeight(0, 65);
-        renderer.Draw(box, XMMatrixScaling(4, 12, 4) * XMMatrixTranslation(0, ground + 6, 65),
-            {.15f, 1.f, .63f, .16f}, Pass::Alpha);
-        renderer.BindTexture(TextureId::GameText);
-        const auto goalWorld = XMMatrixRotationY(time * .45f) * XMMatrixTranslation(0, ground + 9, 65);
-        renderer.Draw(goalText.mesh, goalWorld, Mint, Pass::Font);
-    }
-    if (shield && player.hp) {
-        renderer.Draw(sphere, XMMatrixScaling(4, 3.05f, 4) * At(PlayerCenter()),
-            {.18f, .85f, 1.f, .2f}, Pass::Alpha);
+        if (shield && player.hp) {
+            renderer.Draw(sphere, XMMatrixScaling(4, 3.05f, 4) * At(PlayerCenter()),
+                {.18f, .85f, 1.f, .2f}, Pass::Alpha);
+        }
     }
     DrawImpacts();
     if (IsLevel()) DrawHealthLabels();
@@ -681,7 +650,7 @@ void Game::Render() {
         renderer.viewProjection = XMMatrixOrthographicLH(overlayHeight * aspect, overlayHeight, 0, 1);
         renderer.BindTexture(TextureId::GameText);
         const bool won = result == Result::Won;
-        renderer.Draw(won ? winText.mesh : lostText.mesh, XMMatrixTranslation(0, overlayHeight * .14f, 0),
+        renderer.Draw(won ? winText : lostText, XMMatrixTranslation(0, overlayHeight * .14f, 0),
             won ? Mint : Red, Pass::Font);
     }
     renderer.EndFrame();

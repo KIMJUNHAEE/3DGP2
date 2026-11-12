@@ -209,12 +209,13 @@ void Renderer::MakePipeline() {
     const auto vsTree = Compile("VSTree", "vs_5_0");
     const auto gsTree = Compile("GSTree", "gs_5_0");
     const auto psTree = Compile("PSTree", "ps_5_0");
+    const auto vsSkybox = Compile("VSSkybox", "vs_5_0");
     const D3D12_INPUT_ELEMENT_DESC layout[] = {
         {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
         {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
         {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}
     };
-    const D3D12_INPUT_ELEMENT_DESC treeLayout[] = {layout[0], layout[2]};
+    const D3D12_INPUT_ELEMENT_DESC positionUvLayout[] = {layout[0], layout[2]};
     D3D12_GRAPHICS_PIPELINE_STATE_DESC state{};
     state.pRootSignature = root.Get();
     state.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
@@ -240,9 +241,10 @@ void Renderer::MakePipeline() {
         const auto pass = static_cast<Pass>(index);
         const bool impact = pass == Pass::Impact;
         const bool tree = pass == Pass::Tree;
+        const bool skybox = pass == Pass::Skybox;
         const bool transparent = pass == Pass::Alpha || pass == Pass::Font || impact;
         state.InputLayout = {layout, impact ? 1u : static_cast<UINT>(_countof(layout))};
-        if (tree) state.InputLayout = {treeLayout, _countof(treeLayout)};
+        if (tree || skybox) state.InputLayout = {positionUvLayout, _countof(positionUvLayout)};
         state.PrimitiveTopologyType = UsesPointList(pass) ? D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT
             : D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
         auto* vertexShader = vs.Get();
@@ -260,13 +262,18 @@ void Renderer::MakePipeline() {
             geometryShader = gsTree.Get();
             pixelShader = psTree.Get();
         }
+        if (skybox) {
+            vertexShader = vsSkybox.Get();
+            pixelShader = psFont.Get();
+        }
         state.VS = {vertexShader->GetBufferPointer(), vertexShader->GetBufferSize()};
         state.GS = {};
         if (geometryShader) {
             state.GS = {geometryShader->GetBufferPointer(), geometryShader->GetBufferSize()};
         }
         state.PS = {pixelShader->GetBufferPointer(), pixelShader->GetBufferSize()};
-        state.DepthStencilState.DepthWriteMask = transparent ? D3D12_DEPTH_WRITE_MASK_ZERO : D3D12_DEPTH_WRITE_MASK_ALL;
+        state.DepthStencilState.DepthWriteMask = (transparent || skybox)
+            ? D3D12_DEPTH_WRITE_MASK_ZERO : D3D12_DEPTH_WRITE_MASK_ALL;
         blend.BlendEnable = transparent;
         Check(device->CreateGraphicsPipelineState(&state, IID_PPV_ARGS(&pipeline[index])), "Graphics Pipeline State를 만들지 못했음");
     }
@@ -286,7 +293,13 @@ void Renderer::LoadTextures() {
         {L"Texture/ImpactSpark.dds", "ImpactSpark.dds를 불러오지 못했음"},
         {L"Texture/TreeBillboard.dds", "TreeBillboard.dds를 불러오지 못했음"},
         {L"Texture/FontDigits.dds", "FontDigits.dds를 불러오지 못했음"},
-        {L"Texture/GameText.dds", "GameText.dds를 불러오지 못했음"}
+        {L"Texture/GameText.dds", "GameText.dds를 불러오지 못했음"},
+        {L"Texture/Skybox/Right.dds", "Skybox Right.dds를 불러오지 못했음"},
+        {L"Texture/Skybox/Left.dds", "Skybox Left.dds를 불러오지 못했음"},
+        {L"Texture/Skybox/Top.dds", "Skybox Top.dds를 불러오지 못했음"},
+        {L"Texture/Skybox/Bottom.dds", "Skybox Bottom.dds를 불러오지 못했음"},
+        {L"Texture/Skybox/Front.dds", "Skybox Front.dds를 불러오지 못했음"},
+        {L"Texture/Skybox/Back.dds", "Skybox Back.dds를 불러오지 못했음"}
     };
     static_assert(_countof(files) == textureCount);
 

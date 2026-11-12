@@ -21,8 +21,11 @@ struct Mesh {
     unsigned count = 0;
 };
 
-enum class Pass { Opaque, Alpha, Font, Model, Impact, Tree, Count };
-enum class TextureId { Intro, Menu, Tutorial, Tank, Helicopter, Impact, Tree, Digits, GameText, Count };
+enum class Pass { Opaque, Alpha, Font, Model, Impact, Tree, Skybox, Count };
+enum class TextureId {
+    Intro, Menu, Tutorial, Tank, Helicopter, Impact, Tree, Digits, GameText,
+    SkyRight, SkyLeft, SkyTop, SkyBottom, SkyFront, SkyBack, Count
+};
 
 class Renderer {
 public:

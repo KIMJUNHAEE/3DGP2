@@ -1,5 +1,6 @@
 #pragma once
 #include "Renderer.h"
+#include <array>
 
 struct TextMesh {
     Mesh mesh;
@@ -8,6 +9,7 @@ struct TextMesh {
 };
 
 Mesh MakeBox(Renderer& renderer);
+std::array<Mesh, 6> MakeSkyboxFaces(Renderer& renderer);
 Mesh MakeSphere(Renderer& renderer);
 Mesh MakeTerrain(Renderer& renderer);
 float GroundHeight(float x, float z);
