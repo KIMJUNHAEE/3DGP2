@@ -87,7 +87,7 @@ private:
     std::array<Mesh, 3> tank, helicopter;
     TextMesh title{}, name{}, introHint{}, menuTitle{}, winText{}, lostText{}, goalText{};
     std::array<TextMesh, 6> menu;
-    std::array<TextMesh, 6> tutorial;
+    TextMesh tutorial{};
     Scene scene = Scene::Intro;
     Result result = Result::Playing;
     Unit player;
@@ -118,26 +118,28 @@ void Game::Init(HWND window) {
         LoadObj(renderer, "Assets/Helicopter/H04_MainRotor_LOD0.obj"),
         LoadObj(renderer, "Assets/Helicopter/H04_TailRotor_LOD0.obj")
     };
-    title = Make3DText(renderer, L"3D 게임프로그래밍 1");
-    name = Make3DText(renderer, L"김준해");
-    introHint = Make3DText(renderer, L"CLICK THE NAME");
-    menuTitle = Make3DText(renderer, L"MENU");
+    // IntroText.dds에서 제목, 이름, 안내 문구에 각각 다른 UV 영역을 사용한다.
+    title = MakeTexturedQuad(renderer, 14.0f, 3.5f, 0.5f, 0.125f, 1.0f, 0.375f);
+    name = MakeTexturedQuad(renderer, 4.6f, 2.3f, 0.0f, 0.0f, 0.5f, 0.5f);
+    introHint = MakeTexturedQuad(renderer, 10.4f, 2.6f, 0.0f, 0.5f, 1.0f, 1.0f);
+    menuTitle = MakeTexturedQuad(renderer, 9.6f, 2.4f, 0.0f, 0.0f, 1.0f, 0.125f);
     winText = Make3DText(renderer, L"You Win!");
     lostText = Make3DText(renderer, L"Game Over");
     goalText = Make3DText(renderer, L"GOAL");
 
-    const wchar_t* labels[] = {L"Tutorial", L"Level-1", L"Level-2", L"Level-3", L"Start", L"End"};
-    for (size_t index = 0; index < menu.size(); ++index) menu[index] = Make3DText(renderer, labels[index]);
-    const wchar_t* instructions[] = {
-        L"ARROWS   MOVE",
-        L"LEFT DRAG   TURN / AIM",
-        L"SPACE   FIRE     E / Q   UP / DOWN",
-        L"TANK   RMB   SELECT     A   AUTO     S   SHIELD",
-        L"N   NEXT LEVEL     V   CAMERA     W   WIN",
-        L"ESC   BACK"
-    };
-    for (size_t index = 0; index < tutorial.size(); ++index)
-        tutorial[index] = Make3DText(renderer, instructions[index]);
+    // 투명 여백을 잘라 클릭 범위를 각 메뉴 항목의 글자 크기에 맞춘다.
+    constexpr float menuHalfWidths[] = {168, 148, 148, 148, 108, 78};
+    constexpr float menuUnitsPerPixel = 10.5f / 512.0f;
+    for (size_t index = 0; index < menu.size(); ++index) {
+        const float rowTop = static_cast<float>((index + 1) * 128);
+        const float halfWidth = menuHalfWidths[index];
+        const float uOffset = halfWidth / 512.0f;
+        menu[index] = MakeTexturedQuad(renderer,
+            2.0f * halfWidth * menuUnitsPerPixel, 76.0f * menuUnitsPerPixel,
+            0.5f - uOffset, (rowTop + 26.0f) / 1024.0f,
+            0.5f + uOffset, (rowTop + 102.0f) / 1024.0f);
+    }
+    tutorial = MakeTexturedQuad(renderer, 30.72f, 9.6f, 0.0f, 0.0f, 1.0f, 1.0f);
 
     Enter(Scene::Intro);
 }
@@ -178,7 +180,7 @@ void Game::Enter(Scene next) {
             }
         }
 
-        // Keep the route and the tank spawn positions clear.
+        // 이동 경로와 탱크 시작 위치에는 장애물을 배치하지 않는다.
         std::mt19937 placement(4);
         std::uniform_real_distribution<float> position(-68.f, 68.f), size(1.1f, 2.8f);
         const size_t count = scene == Scene::Level2 ? 55 : 26;
@@ -333,7 +335,7 @@ void Game::UpdateShots(float dt) {
         shot.remaining -= dt;
         if (shot.remaining <= 0) continue;
 
-        // Choose the nearest hit along this frame's segment.
+        // 이번 프레임에 탄환이 이동한 구간에서 가장 가까운 충돌을 찾는다.
         float nearest = length + .0001f;
         int hit = -1;
         auto test = [&](const XMFLOAT3& center, float radius, int id) {
@@ -493,19 +495,22 @@ void Game::Render() {
     renderer.viewProjection = viewProjection;
 
     if (scene == Scene::Intro) {
-        DrawText3D(title, XMMatrixRotationY(.35f * std::sin(time * 1.6f)) * XMMatrixTranslation(0, 2.55f, 0), Ice);
+        renderer.BindTextTexture(TextTexture::Intro);
+        const auto titleWorld = XMMatrixRotationY(.35f * std::sin(time * 1.6f)) *
+            XMMatrixTranslation(0, 2.55f, 0);
+        renderer.Draw(title.mesh, titleWorld, Ice, Pass::Font);
         if (introExplosion < 0) {
-            DrawText3D(name, IntroName(), Amber);
-            DrawText3D(introHint, XMMatrixScaling(.56f, .56f, .56f) * XMMatrixTranslation(0, -3.35f, 0), Mint);
+            renderer.Draw(name.mesh, IntroName(), Amber, Pass::Font);
+            renderer.Draw(introHint.mesh, XMMatrixTranslation(0, -3.35f, 0), Mint, Pass::Font);
         }
     } else if (scene == Scene::Menu) {
-        DrawText3D(menuTitle, XMMatrixTranslation(0, 5.45f, 0), Amber);
+        renderer.BindTextTexture(TextTexture::Menu);
+        renderer.Draw(menuTitle.mesh, XMMatrixTranslation(0, 5.45f, 0), Amber, Pass::Font);
         for (size_t index = 0; index < menu.size(); ++index)
-            DrawText3D(menu[index], MenuItem(index), index == 4 ? Mint : Ice);
+            renderer.Draw(menu[index].mesh, MenuItem(index), index == 4 ? Mint : Ice, Pass::Font);
     } else if (scene == Scene::Tutorial) {
-        for (size_t index = 0; index < tutorial.size(); ++index)
-            DrawText3D(tutorial[index], XMMatrixScaling(.62f, .62f, .62f) *
-                XMMatrixTranslation(0, 4.1f - 1.6f * float(index), 0), index == 0 ? Mint : Ice);
+        renderer.BindTextTexture(TextTexture::Tutorial);
+        renderer.Draw(tutorial.mesh, XMMatrixTranslation(0, 0.1f, 0), {1, 1, 1, 1}, Pass::Font);
     } else {
         renderer.Draw(terrain, XMMatrixIdentity(), {.36f, .49f, .3f, 1});
         for (const auto& obstacle : obstacles) {

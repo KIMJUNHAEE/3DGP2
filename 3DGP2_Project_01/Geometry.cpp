@@ -127,7 +127,7 @@ Mesh LoadObj(Renderer& renderer, const char* path) {
         if (tag == "v" || tag == "vn") {
             XMFLOAT3 v{};
             row >> v.x >> v.y >> v.z;
-            v.x = -v.x;  // RH to LH while keeping +Z as forward.
+            v.x = -v.x;  // 전방 방향은 +Z로 유지하면서 오른손 좌표계를 왼손 좌표계로 변환한다.
             (tag == "v" ? positions : normals).push_back(v);
         } else if (tag == "f") {
             std::vector<Vertex> face;
@@ -179,4 +179,16 @@ TextMesh Make3DText(Renderer& renderer, const wchar_t* text) {
         }
     }
     return {renderer.MakeMesh(vertices), (right - left) * pixel, (bottom - top) * pixel};
+}
+
+TextMesh MakeTexturedQuad(Renderer& renderer, float width, float height,
+    float u0, float v0, float u1, float v1) {
+    const float x = width / 2.0f;
+    const float y = height / 2.0f;
+    const XMFLOAT3 normal{0, 0, -1};
+    const Vertex a{{-x,  y, 0}, normal, {u0, v0}};
+    const Vertex b{{ x,  y, 0}, normal, {u1, v0}};
+    const Vertex c{{-x, -y, 0}, normal, {u0, v1}};
+    const Vertex d{{ x, -y, 0}, normal, {u1, v1}};
+    return {renderer.MakeMesh({a, b, c, c, b, d}), width, height};
 }

@@ -15,6 +15,7 @@ constexpr unsigned Height = 720;
 struct Vertex {
     XMFLOAT3 position;
     XMFLOAT3 normal;
+    XMFLOAT2 uv{};
 };
 
 struct Mesh {
@@ -23,7 +24,8 @@ struct Mesh {
     unsigned count = 0;
 };
 
-enum class Pass { Opaque, Alpha, Count };
+enum class Pass { Opaque, Alpha, Font, Count };
+enum class TextTexture { Intro, Menu, Tutorial, Count };
 
 class Renderer {
 public:
@@ -31,6 +33,7 @@ public:
     void Init(HWND window);
     Mesh MakeMesh(const std::vector<Vertex>& vertices);
     void BeginFrame(const XMFLOAT4& clear);
+    void BindTextTexture(TextTexture texture);
     void Draw(const Mesh& mesh, const XMMATRIX& world, const XMFLOAT4& color,
         Pass pass = Pass::Opaque);
     void EndFrame();
@@ -59,7 +62,8 @@ private:
     unsigned backBuffer = 0;
     Pass currentPass = Pass::Count;
 
-    void LoadFontAtlas();
-    ComPtr<ID3D12Resource> fontAtlas;
+    void LoadTextTextures();
+    ComPtr<ID3D12Resource> textTextures[static_cast<UINT>(TextTexture::Count)];
+    ComPtr<ID3D12DescriptorHeap> textSrvHeap;
 };
 

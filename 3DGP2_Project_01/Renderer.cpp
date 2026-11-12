@@ -126,15 +126,40 @@ void Renderer::Init(HWND window) {
     fenceEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (!fenceEvent) throw std::runtime_error("GPU Fence Event를 만들지 못했음");
     MakePipeline();
-    LoadFontAtlas();
+    LoadTextTextures();
 }
 
 void Renderer::MakePipeline() {
-    D3D12_ROOT_PARAMETER constants{};
-    constants.ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    constants.Constants.Num32BitValues = ConstantCount;
-    D3D12_ROOT_SIGNATURE_DESC rootDesc{1, &constants, 0, nullptr,
-        D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT};
+    D3D12_DESCRIPTOR_RANGE fontRange{};
+    fontRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    fontRange.NumDescriptors = 1;
+    fontRange.BaseShaderRegister = 0;  // 글자 텍스처 레지스터 t0
+
+    D3D12_ROOT_PARAMETER params[2]{};
+    params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    params[0].Constants.Num32BitValues = ConstantCount;
+    params[0].Constants.ShaderRegister = 0;  // 루트 상수 레지스터 b0
+    params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[1].DescriptorTable = { 1, &fontRange };
+    params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    D3D12_STATIC_SAMPLER_DESC sampler{};
+    sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    sampler.AddressU = sampler.AddressV = sampler.AddressW =
+        D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.MaxAnisotropy = 1;
+    sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+    sampler.MaxLOD = D3D12_FLOAT32_MAX;
+    sampler.ShaderRegister = 0;  // 텍스처 샘플러 레지스터 s0
+    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    D3D12_ROOT_SIGNATURE_DESC rootDesc{
+        _countof(params), params, 1, &sampler,
+        D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT
+    };
+
     ComPtr<ID3DBlob> signature;
     if (FAILED(D3D12SerializeRootSignature(&rootDesc, D3D_ROOT_SIGNATURE_VERSION_1, &signature, nullptr)) ||
         FAILED(device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(),
@@ -144,15 +169,16 @@ void Renderer::MakePipeline() {
 
     const auto vs = Compile("VSMain", "vs_5_0");
     const auto ps = Compile("PSMain", "ps_5_0");
+    const auto psFont = Compile("PSFont", "ps_5_0");
     const D3D12_INPUT_ELEMENT_DESC layout[] = {
         {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-        {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}
+        {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}
     };
     D3D12_GRAPHICS_PIPELINE_STATE_DESC state{};
     state.pRootSignature = root.Get();
     state.InputLayout = {layout, _countof(layout)};
     state.VS = {vs->GetBufferPointer(), vs->GetBufferSize()};
-    state.PS = {ps->GetBufferPointer(), ps->GetBufferSize()};
     state.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
     state.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
     state.RasterizerState.DepthClipEnable = TRUE;
@@ -176,36 +202,61 @@ void Renderer::MakePipeline() {
     for (int index = 0; index < static_cast<int>(Pass::Count); ++index) {
         const auto pass = static_cast<Pass>(index);
         state.DepthStencilState.DepthWriteMask = pass == Pass::Opaque ? D3D12_DEPTH_WRITE_MASK_ALL : D3D12_DEPTH_WRITE_MASK_ZERO;
-        blend.BlendEnable = pass == Pass::Alpha;
+        auto* pixelShader = pass == Pass::Font ? psFont.Get() : ps.Get();
+        state.PS = {pixelShader->GetBufferPointer(), pixelShader->GetBufferSize()};
+        blend.BlendEnable = pass != Pass::Opaque;
         Check(device->CreateGraphicsPipelineState(&state, IID_PPV_ARGS(&pipeline[index])), "Graphics Pipeline State를 만들지 못했음");
     }
 }
 
-void Renderer::LoadFontAtlas() {
-    std::unique_ptr<uint8_t[]> ddsData;
-    std::vector<D3D12_SUBRESOURCE_DATA> subresources;
+void Renderer::LoadTextTextures() {
+    constexpr UINT textureCount = static_cast<UINT>(TextTexture::Count);
+    constexpr struct {
+        const wchar_t* path;
+        const char* error;
+    } files[] = {
+        {L"Texture/IntroText.dds", "IntroText.dds를 불러오지 못했음"},
+        {L"Texture/MenuText.dds", "MenuText.dds를 불러오지 못했음"},
+        {L"Texture/TutorialText.dds", "TutorialText.dds를 불러오지 못했음"}
+    };
+    static_assert(_countof(files) == textureCount);
 
-    Check(DirectX::LoadDDSTextureFromFileEx(
-        device.Get(), L"Texture/FontUI.dds",
-        0, D3D12_RESOURCE_FLAG_NONE, DirectX::DDS_LOADER_DEFAULT,
-        fontAtlas.GetAddressOf(), ddsData, subresources),
-        "FontUI.dds를 불러오지 못했음");
-
-    const UINT count = static_cast<UINT>(subresources.size());
-    auto upload = UploadBuffer(
-        GetRequiredIntermediateSize(fontAtlas.Get(), 0, count));
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    heapDesc.NumDescriptors = textureCount;
+    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    Check(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&textSrvHeap)),
+        "Text Texture용 Descriptor Heap을 만들지 못했음");
 
     ResetCommands();
+    ComPtr<ID3D12Resource> uploads[textureCount];
+    for (UINT index = 0; index < textureCount; ++index) {
+        auto& texture = textTextures[index];
+        std::unique_ptr<uint8_t[]> ddsData;
+        std::vector<D3D12_SUBRESOURCE_DATA> subresources;
+        Check(DirectX::LoadDDSTextureFromFileEx(
+            device.Get(), files[index].path, 0, D3D12_RESOURCE_FLAG_NONE, DirectX::DDS_LOADER_DEFAULT,
+            texture.GetAddressOf(), ddsData, subresources), files[index].error);
 
-    if (UpdateSubresources(commands.Get(), fontAtlas.Get(), upload.Get(),
-        0, 0, count, subresources.data()) == 0) {
-        throw std::runtime_error("Font Texture를 복사하지 못했음");
+        const UINT count = static_cast<UINT>(subresources.size());
+        uploads[index] = UploadBuffer(GetRequiredIntermediateSize(texture.Get(), 0, count));
+        if (UpdateSubresources(commands.Get(), texture.Get(), uploads[index].Get(),
+            0, 0, count, subresources.data()) == 0) {
+            throw std::runtime_error("Text Texture를 복사하지 못했음");
+        }
+
+        Transition(commands.Get(), texture.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+
+        const auto textureDesc = texture->GetDesc();
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.Format = textureDesc.Format;
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Texture2D.MipLevels = textureDesc.MipLevels;
+        device->CreateShaderResourceView(texture.Get(), &srvDesc,
+            Cpu(textSrvHeap.Get(), index, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV));
     }
-
-    Transition(commands.Get(), fontAtlas.Get(),
-        D3D12_RESOURCE_STATE_COPY_DEST,
-        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-
     SubmitCommands();
     WaitForGpu();
 }
@@ -278,7 +329,17 @@ void Renderer::BeginFrame(const XMFLOAT4& clear) {
     commands->RSSetViewports(1, &viewport);
     commands->RSSetScissorRects(1, &scissor);
     commands->SetGraphicsRootSignature(root.Get());
+    ID3D12DescriptorHeap* heaps[] = {textSrvHeap.Get()};
+    commands->SetDescriptorHeaps(_countof(heaps), heaps);
     commands->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+}
+
+void Renderer::BindTextTexture(TextTexture texture) {
+    auto handle = textSrvHeap->GetGPUDescriptorHandleForHeapStart();
+    const UINT increment =
+        device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    handle.ptr += UINT64(static_cast<UINT>(texture)) * increment;
+    commands->SetGraphicsRootDescriptorTable(1, handle);
 }
 
 void Renderer::Draw(const Mesh& mesh, const XMMATRIX& world, const XMFLOAT4& color, Pass pass) {
@@ -300,7 +361,7 @@ void Renderer::EndFrame() {
     SubmitCommands();
 
     const HRESULT presentResult = swap->Present(1, 0);
-    // Wait for presentation as well as drawing before reusing or releasing resources.
+    // 리소스를 재사용하거나 해제하기 전에 렌더링과 화면 표시가 끝날 때까지 기다린다.
     WaitForGpu();
     Check(presentResult, "Frame을 화면에 표시하지 못했음");
 }
